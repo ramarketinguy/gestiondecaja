@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Violet | Login</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@400;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        :root {
+            --violet-900: #1a0a2e;
+            --violet-800: #231338;
+            --violet-700: #2d1b45;
+            --violet-600: #3d2660;
+            --violet-500: #5b3a8a;
+            --violet-400: #7b52b5;
+            --violet-300: #9b72d4;
+            --gold-500: #c9a84c;
+            --gold-400: #d4b85c;
+            --text-primary: #f0eaf5;
+            --text-secondary: #a898b8;
+            --success: #4ade80;
+            --danger: #f87171;
+            --info: #60a5fa;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, var(--violet-900) 0%, var(--violet-800) 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-primary);
+        }
+
+        .login-container {
+            width: 100%;
+            max-width: 420px;
+            padding: 2rem;
+        }
+
+        .login-card {
+            background: rgba(35, 19, 56, 0.7);
+            border: 1px solid rgba(155, 114, 212, 0.15);
+            border-radius: 20px;
+            padding: 3rem 2rem;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 40px rgba(0, 0, 0, 0.4);
+        }
+
+        .login-header {
+            text-align: center;
+            margin-bottom: 2.5rem;
+        }
+
+        .login-logo {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 1.5rem;
+            background: linear-gradient(135deg, var(--violet-400), var(--gold-500));
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: white;
+        }
+
+        .login-title {
+            font-family: 'Playfair Display', serif;
+            font-size: 1.8rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
+        .login-subtitle {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin-bottom: 0.6rem;
+            color: var(--text-secondary);
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 0.85rem 1rem;
+            background: rgba(15, 10, 24, 0.6);
+            border: 1px solid rgba(155, 114, 212, 0.15);
+            border-radius: 10px;
+            color: var(--text-primary);
+            font-family: 'Inter', sans-serif;
+            font-size: 0.95rem;
+            transition: all 0.2s;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: var(--gold-400);
+            box-shadow: 0 0 0 3px rgba(201, 168, 76, 0.1);
+            background: rgba(15, 10, 24, 0.8);
+        }
+
+        .form-group input::placeholder {
+            color: rgba(240, 234, 245, 0.3);
+        }
+
+        .btn {
+            width: 100%;
+            padding: 0.95rem 1.5rem;
+            background: linear-gradient(135deg, var(--violet-400), var(--violet-500));
+            border: none;
+            border-radius: 10px;
+            color: white;
+            font-weight: 600;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(91, 58, 138, 0.4);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn.secondary {
+            background: transparent;
+            border: 1px solid var(--gold-400);
+            color: var(--gold-400);
+            margin-top: 0.75rem;
+        }
+
+        .btn.secondary:hover {
+            background: rgba(201, 168, 76, 0.1);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .alert {
+            padding: 1rem;
+            border-radius: 10px;
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
+            display: none;
+        }
+
+        .alert.show { display: block; }
+        .alert.success { background: rgba(74, 222, 128, 0.1); border: 1px solid rgba(74, 222, 128, 0.3); color: var(--success); }
+        .alert.error { background: rgba(248, 113, 113, 0.1); border: 1px solid rgba(248, 113, 113, 0.3); color: var(--danger); }
+        .alert.info { background: rgba(96, 165, 250, 0.1); border: 1px solid rgba(96, 165, 250, 0.3); color: var(--info); }
+
+        .form-footer {
+            text-align: center;
+            margin-top: 1.5rem;
+            font-size: 0.85rem;
+        }
+
+        .form-footer a {
+            color: var(--gold-400);
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .form-footer a:hover { text-decoration: underline; }
+
+        .tab-buttons {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+            border-bottom: 1px solid rgba(155, 114, 212, 0.15);
+        }
+
+        .tab-btn {
+            flex: 1;
+            padding: 0.75rem;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-weight: 500;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .tab-btn.active {
+            color: var(--gold-400);
+            border-bottom-color: var(--gold-400);
+        }
+
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading .spinner {
+            display: inline-block;
+            margin-right: 0.5rem;
+        }
+
+        @media (max-width: 600px) {
+            .login-card { padding: 2rem 1.5rem; }
+            .login-title { font-size: 1.4rem; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="login-container">
+    <div class="login-card">
+        <div class="login-header">
+            <div class="login-logo">🟣</div>
+            <h1 class="login-title">Violet</h1>
+            <p class="login-subtitle">Sistema de Gestión POS & ERP</p>
+        </div>
+
+        <div id="alert" class="alert"></div>
+
+        <div class="tab-buttons">
+            <button class="tab-btn active" data-tab="email-login">Email</button>
+            <button class="tab-btn" data-tab="magic-link">Sin Contraseña</button>
+            <button class="tab-btn" data-tab="signup">Crear Cuenta</button>
+        </div>
+
+        <!-- Tab: Email + Contraseña -->
+        <div id="email-login" class="tab-content active">
+            <form id="loginForm">
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" id="login-email" placeholder="tu@email.com" required>
+                </div>
+                <div class="form-group">
+                    <label>Contraseña</label>
+                    <input type="password" id="login-password" placeholder="••••••••" required>
+                </div>
+                <button type="submit" class="btn" id="loginBtn">Ingresar</button>
+                <div class="form-footer">
+                    <a href="#" id="forgotPasswordLink">¿Olvidaste tu contraseña?</a>
+                </div>
+            </form>
+        </div>
+
+        <!-- Tab: Magic Link -->
+        <div id="magic-link" class="tab-content">
+            <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.9rem;">
+                Te enviaremos un enlace de acceso seguro a tu email.
+            </p>
+            <form id="magicLinkForm">
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" id="magic-email" placeholder="tu@email.com" required>
+                </div>
+                <button type="submit" class="btn" id="magicBtn">Enviar Enlace</button>
+            </form>
+        </div>
+
+        <!-- Tab: Crear Cuenta -->
+        <div id="signup" class="tab-content">
+            <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.85rem; background: rgba(201,168,76,0.1); padding: 0.75rem; border-radius: 8px; border-left: 3px solid var(--gold-400);">
+                ⚠️ <strong>Importante:</strong> Después de crear cuenta, recibís un email de confirmación. Debés hacer click en el enlace para activar tu cuenta.
+            </p>
+            <form id="signupForm">
+                <div class="form-group">
+                    <label>Nombre Completo</label>
+                    <input type="text" id="signup-name" placeholder="Patricia López" required>
+                </div>
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" id="signup-email" placeholder="tu@email.com" required>
+                </div>
+                <div class="form-group">
+                    <label>Contraseña (mín. 6 caracteres)</label>
+                    <input type="password" id="signup-password" placeholder="••••••••" required minlength="6">
+                </div>
+                <button type="submit" class="btn" id="signupBtn">Crear Cuenta</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Scripts -->
+<script src="config.js"></script>
+<script src="state.js"></script>
+<script src="validation.js"></script>
+<script src="supabase-helpers.js"></script>
+<script src="auth.js"></script>
+
+<script>
+// Gestión de tabs
+document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const tabName = btn.getAttribute('data-tab');
+        
+        // Remover active de todos
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+        
+        // Agregar active
+        btn.classList.add('active');
+        document.getElementById(tabName).classList.add('active');
+    });
+});
+
+// Mostrar alerta
+function showAlert(message, type = 'info') {
+    const alert = document.getElementById('alert');
+    alert.textContent = message;
+    alert.className = `alert show ${type}`;
+    if (type === 'success') {
+        setTimeout(() => alert.classList.remove('show'), 3000);
+    }
+}
+
+// Map showToast to showAlert for auth.js compatibility
+window.showToast = showAlert;
+
+// Funciones necesarias para auth.js
+function redirectToDashboard() {
+    window.location.href = 'pos.html';
+}
+
+function resetState() {
+    // Limpiar estado
+    localStorage.clear();
+    sessionStorage.clear();
+}
+
+// Login Email
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('login-email').value;
+    const password = document.getElementById('login-password').value;
+    const btn = document.getElementById('loginBtn');
+    
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Ingresando...';
+    
+    try {
+        if (await loginWithEmail(email, password)) {
+            showAlert('¡Bienvenido!', 'success');
+            setTimeout(() => redirectToDashboard(), 1000);
+        }
+    } catch (err) {
+        console.error('Login error:', err);
+        showAlert('Error en el proceso de login', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Ingresar';
+    }
+});
+
+// Magic Link
+document.getElementById('magicLinkForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('magic-email').value;
+    const btn = document.getElementById('magicBtn');
+    
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Enviando...';
+    
+    try {
+        if (await loginWithMagicLink(email)) {
+            showAlert('Revisa tu email para el enlace de acceso', 'info');
+        }
+    } catch (err) {
+        console.error('Magic link error:', err);
+        showAlert('Error al enviar el enlace', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Enviar Enlace';
+    }
+});
+
+// Signup - Crear cuenta directamente ( sin confirmación de email)
+document.getElementById('signupForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = document.getElementById('signup-name').value;
+    const email = document.getElementById('signup-email').value;
+    const password = document.getElementById('signup-password').value;
+    const btn = document.getElementById('signupBtn');
+
+    if (password.length < 6) {
+        showAlert('La contraseña debe tener al menos 6 caracteres', 'error');
+        return;
+    }
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Creando cuenta...';
+
+    try {
+        // Crear usuario directamente usando Supabase Auth
+        const { data, error } = await window.supabaseClient.auth.signUp({
+            email,
+            password,
+            options: {
+                data: { full_name: name }
+            }
+        });
+
+        if (error) {
+            console.error('Signup error:', error);
+            // Si el error es de email ya existente, intentar sign in directo
+            if (error.message.includes('already registered')) {
+                showAlert('Este email ya está registrado. Intentá iniciar sesión.', 'error');
+            } else {
+                showAlert('Error: ' + error.message, 'error');
+            }
+            return;
+        }
+
+        // Si no requiere confirmación, redirigir directamente
+        if (data.user && !data.session) {
+            // Usuario creado pero requiere confirmación de email
+            showAlert('Cuenta creada. Revisa tu email para confirmar.', 'info');
+            setTimeout(() => {
+                document.getElementById('email-login').classList.add('active');
+                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                document.querySelector('[data-tab="email-login"]').classList.add('active');
+                document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+                document.getElementById('email-login').classList.add('active');
+            }, 2000);
+            return;
+        }
+
+        // Creado con sesión automática (sin confirmar email)
+        showAlert('¡Cuenta creada!', 'success');
+        setTimeout(() => redirectToDashboard(), 1000);
+    } catch (err) {
+        console.error('Signup error:', err);
+        showAlert('Error al crear la cuenta: ' + err.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Crear Cuenta';
+    }
+});
+
+// Forgot Password
+document.getElementById('forgotPasswordLink').addEventListener('click', async (e) => {
+    e.preventDefault();
+    const email = prompt('Ingresa tu email:');
+    if (email) {
+        if (await resetPassword(email)) {
+            showAlert('Revisa tu email para restablecer la contraseña', 'info');
+        }
+    }
+});
+
+// Cerrar sesión (logout) función global
+async function logout() {
+    await window.supabaseClient.auth.signOut();
+    resetState();
+    window.location.href = 'login.html';
+}
+
+// Verificar si ya está logueado
+(async () => {
+    const { data: { session } } = await window.supabaseClient.auth.getSession();
+    if (session) {
+        redirectToDashboard();
+    }
+})();
+</script>
+
+</body>
+</html>

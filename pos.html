@@ -1,0 +1,1243 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Violet | Sistema de Gestión y ERP</title>
+    <meta name="description" content="Sistema de gestión, CRM y agenda profesional para Violet Peluquería Unisex">
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@400;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+
+    <!-- Chart.js para Analíticas -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- Supabase -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    
+    <link rel="stylesheet" href="pos.css">
+</head>
+<body>
+
+    <!-- ═══════════════════ SIDEBAR ═══════════════════ -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <img src="Logo/Logo Violet SF (1).png" alt="Violet Peluquería" class="sidebar-logo" id="sidebar-logo">
+        </div>
+
+        <nav class="sidebar-nav">
+            <a href="#" class="nav-link active" data-view="dashboard" id="nav-dashboard">
+                <i data-lucide="layout-dashboard"></i>
+                <span>Pendientes del Día</span>
+            </a>
+            <a href="#" class="nav-link" data-view="agenda" id="nav-agenda">
+                <i data-lucide="calendar"></i>
+                <span>Agenda</span>
+            </a>
+            <a href="#" class="nav-link" data-view="caja" id="nav-caja">
+                <i data-lucide="calculator"></i>
+                <span>Caja y Finanzas</span>
+            </a>
+            <a href="#" class="nav-link" data-view="clients" id="nav-clients">
+                <i data-lucide="contact"></i>
+                <span>Directorio Clientes</span>
+            </a>
+            <a href="#" class="nav-link" data-view="analytics" id="nav-analytics">
+                <i data-lucide="bar-chart-3"></i>
+                <span>Analíticas</span>
+            </a>
+            <a href="#" class="nav-link" data-view="settings" id="nav-settings">
+                <i data-lucide="settings"></i>
+                <span>Configuración</span>
+            </a>
+        </nav>
+
+        <div class="sidebar-footer">
+            <div class="sidebar-date" id="sidebar-date"></div>
+            <button class="btn-close-register" id="btn-close-register">
+                <i data-lucide="lock"></i>
+                <span>Cerrar Sesión</span>
+            </button>
+        </div>
+    </aside>
+
+    <!-- Mobile Top Bar -->
+    <div class="mobile-topbar" id="mobile-topbar">
+        <button class="mobile-ai-btn" id="btn-ai-chat-mobile">
+            <i data-lucide="bot"></i>
+            <span>Asistente IA</span>
+            <span class="ai-btn-dot"></span>
+        </button>
+    </div>
+
+    <!-- Mobile Bottom Navigation Bar -->
+    <nav class="bottom-nav" id="bottom-nav">
+        <a href="#" class="bottom-nav-item active" data-view="dashboard">
+            <i data-lucide="layout-dashboard"></i>
+            <span>Inicio</span>
+        </a>
+        <a href="#" class="bottom-nav-item" data-view="agenda">
+            <i data-lucide="calendar"></i>
+            <span>Agenda</span>
+        </a>
+        <a href="#" class="bottom-nav-item" data-view="caja">
+            <i data-lucide="calculator"></i>
+            <span>Caja</span>
+        </a>
+        <a href="#" class="bottom-nav-item" data-view="clients">
+            <i data-lucide="contact"></i>
+            <span>Clientes</span>
+        </a>
+        <a href="#" class="bottom-nav-item" data-view="analytics">
+            <i data-lucide="bar-chart-3"></i>
+            <span>Stats</span>
+        </a>
+        <a href="#" class="bottom-nav-item" data-view="settings">
+            <i data-lucide="settings"></i>
+            <span>Config</span>
+        </a>
+    </nav>
+
+    <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+    <!-- ═══════════════════ MAIN CONTENT ═══════════════════ -->
+    <main class="main-content">
+
+        <!-- Header -->
+        <header class="main-header">
+            <div class="header-left">
+                <h1 class="page-title" id="page-title">Bienvenida, Patricia</h1>
+                <p class="page-subtitle" id="page-subtitle">Este es el resumen de tu negocio para el día de hoy.</p>
+            </div>
+            <div class="header-right">
+                <div class="active-user-pill" id="active-user-pill">
+                    <div class="user-avatar">
+                        <i data-lucide="circle-user-round"></i>
+                    </div>
+                    <div class="user-info">
+                        <span class="user-name" id="current-user-name">Patricia</span>
+                        <span class="user-role">Administradora</span>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- ═══════════ VIEW: DASHBOARD (PENDIENTES) ═══════════ -->
+        <section class="view-section active" id="view-dashboard">
+            <div class="dashboard-grid">
+                <!-- Widget Citas de Hoy -->
+                <div class="widget-card">
+                    <div class="widget-header">
+                        <div class="widget-icon" style="color: var(--gold-400); background: rgba(201,168,76,0.12)"><i data-lucide="calendar-clock"></i></div>
+                        <h3>Agenda de Hoy</h3>
+                    </div>
+                    <div class="widget-body" id="widget-agenda">
+                        <!-- Llenado por JS -->
+                    </div>
+                </div>
+
+                <!-- Widget Cumpleaños -->
+                <div class="widget-card">
+                    <div class="widget-header">
+                        <div class="widget-icon" style="color: var(--violet-300); background: rgba(155, 114, 212, 0.15);"><i data-lucide="gift"></i></div>
+                        <h3>Cumpleaños (Próximos 7 días)</h3>
+                    </div>
+                    <div class="widget-body" id="widget-birthdays">
+                        <!-- Llenado por JS -->
+                    </div>
+                </div>
+
+                <!-- Widget Notas y Tareas -->
+                <div class="widget-card">
+                    <div class="widget-header">
+                        <div class="widget-icon" style="color: var(--info); background: var(--info-bg);"><i data-lucide="check-square"></i></div>
+                        <h3>Tareas del Local</h3>
+                        <button class="btn-icon btn-sm" id="btn-add-task" title="Añadir Nota"><i data-lucide="plus"></i></button>
+                    </div>
+                    <div class="widget-body" id="widget-tasks">
+                        <div class="task-input-row hidden" id="task-input-container">
+                            <input type="text" id="new-task-input" placeholder="Escribe una tarea y presiona Enter">
+                        </div>
+                        <ul class="task-list" id="task-list">
+                            <!-- JS Tasks -->
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Widget Pagos Pendientes -->
+                <div class="widget-card">
+                    <div class="widget-header">
+                        <div class="widget-icon" style="color: var(--danger); background: var(--danger-bg);"><i data-lucide="alert-triangle"></i></div>
+                        <h3>Deudas / Saldos Pendientes</h3>
+                    </div>
+                    <div class="widget-body" id="widget-debts">
+                         <!-- Llenado por JS -->
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══════════ VIEW: AGENDA ═══════════ -->
+        <section class="view-section" id="view-agenda">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">
+                        <i data-lucide="calendar"></i>
+                        Citas Programadas
+                    </h2>
+                    <div class="card-actions" style="display:flex; gap:0.8rem; align-items:center; flex-wrap:wrap;">
+                        <div class="agenda-tabs" style="display:flex;gap:4px;background:rgba(0,0,0,0.25);padding:4px;border-radius:8px;">
+                            <button type="button" class="agenda-tab-btn active" data-view="day" style="padding:6px 14px;border:none;background:var(--violet-600);color:#fff;border-radius:6px;cursor:pointer;font-size:.85rem;">Día</button>
+                            <button type="button" class="agenda-tab-btn" data-view="month" style="padding:6px 14px;border:none;background:transparent;color:var(--text-dim);border-radius:6px;cursor:pointer;font-size:.85rem;">Mes</button>
+                        </div>
+                        <input type="date" id="agenda-date-picker" class="date-picker-agenda">
+                        <button class="btn btn-primary btn-sm" id="btn-new-appointment">
+                            <i data-lucide="plus-circle"></i> Agendar Cita
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Vista Día (timeline) -->
+                <div class="agenda-timeline" id="agenda-timeline">
+                    <!-- JS rellena las horas y tarjetas -->
+                </div>
+
+                <!-- Vista Mes (grid + side panel) -->
+                <div id="agenda-month-view" class="hidden" style="padding:1rem 1.5rem 1.5rem;">
+                    <div style="display:grid;grid-template-columns: 2fr 1fr; gap:1.5rem;" id="agenda-month-layout">
+                        <div>
+                            <div id="agenda-month-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+                                <button type="button" class="btn btn-ghost btn-sm" id="agenda-prev-month"><i data-lucide="chevron-left"></i></button>
+                                <h3 id="agenda-month-title" style="margin:0;font-size:1rem;color:var(--text-primary);"></h3>
+                                <button type="button" class="btn btn-ghost btn-sm" id="agenda-next-month"><i data-lucide="chevron-right"></i></button>
+                            </div>
+                            <div id="agenda-month-grid" class="agenda-month-grid"></div>
+                        </div>
+                        <aside id="agenda-side-panel" style="background:rgba(0,0,0,0.2);border-radius:var(--radius);padding:1rem;min-height:400px;">
+                            <h4 style="margin:0 0 .8rem 0;font-size:.85rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;">Resumen del día</h4>
+                            <div id="agenda-side-content"></div>
+                        </aside>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══════════ VIEW: CAJA DEL DÍA ═══════════ -->
+        <section class="view-section" id="view-caja">
+            <!-- Stats Cards -->
+            <div class="stats-row">
+                <div class="stat-card stat-cash">
+                    <div class="stat-icon-wrap"><i data-lucide="banknote"></i></div>
+                    <div class="stat-info">
+                        <span class="stat-label">Efectivo en caja</span>
+                        <span class="stat-value" id="stat-cash">$ 0</span>
+                    </div>
+                </div>
+                <div class="stat-card stat-transfer">
+                    <div class="stat-icon-wrap"><i data-lucide="arrow-right-left"></i></div>
+                    <div class="stat-info">
+                        <span class="stat-label">Transferencias</span>
+                        <span class="stat-value" id="stat-transfers">$ 0</span>
+                    </div>
+                </div>
+                <div class="stat-card stat-deposits">
+                    <div class="stat-icon-wrap"><i data-lucide="piggy-bank"></i></div>
+                    <div class="stat-info">
+                        <span class="stat-label">Señas Recibidas Hoy</span>
+                        <span class="stat-value" id="stat-deps">$ 0</span>
+                    </div>
+                </div>
+                <div class="stat-card stat-total">
+                    <div class="stat-icon-wrap"><i data-lucide="trending-up"></i></div>
+                    <div class="stat-info">
+                        <span class="stat-label">Total Gral. Día</span>
+                        <span class="stat-value" id="stat-total">$ 0</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Entry Form -->
+            <div class="card form-card">
+                <div class="card-header">
+                    <h2 class="card-title">
+                        <i data-lucide="plus-circle"></i> Registrar Movimiento
+                    </h2>
+                    <div style="display:flex; align-items:center; gap:1rem; flex-wrap:wrap;">
+                    <button class="btn btn-secondary btn-sm" id="btn-open-closure" style="border-color:rgba(201,168,76,0.4); color:var(--gold-400);">
+                        <i data-lucide="lock"></i> Cierre de Caja Diario
+                    </button>
+                    <!-- Toggle Switch Ingreso/Egreso -->
+                    <div class="toggle-transaction">
+                        <label class="switch">
+                            <input type="checkbox" id="transaction-type-toggle" checked>
+                            <span class="slider round"></span>
+                        </label>
+                        <span id="trans-type-label" style="font-weight: 600; font-size: 0.9rem; margin-left: 10px; color: var(--success);">Ingreso de Dinero</span>
+                    </div>
+                    </div>
+                </div>
+
+                <form id="pos-form" autocomplete="off">
+                    <div class="form-grid" id="income-fields">
+                        <div class="form-group" style="position: relative;">
+                            <label for="client-name">Cliente (Buscar o crear)</label>
+                            <div class="input-wrap">
+                                <i data-lucide="search"></i>
+                                <input type="text" id="client-name" placeholder="Ej: María González" required>
+                            </div>
+                            <div class="autocomplete-dropdown" id="client-autocomplete"></div>
+                        </div>
+
+                        <div class="form-group" style="position: relative;">
+                            <label for="service" style="display:flex;justify-content:space-between;align-items:center;">
+                                Concepto / Servicio
+                                <button type="button" id="btn-quick-service" style="font-size:0.7rem;color:var(--violet-300);background:none;border:none;cursor:pointer;padding:0;font-family:inherit;">+ Nuevo servicio</button>
+                            </label>
+                            <div class="input-wrap">
+                                <i data-lucide="scissors"></i>
+                                <select id="service" class="custom-select">
+                                    <!-- Rellenado por JS -->
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="amount">Monto Recibido ($)</label>
+                            <div class="input-wrap">
+                                <i data-lucide="dollar-sign"></i>
+                                <input type="number" id="amount" placeholder="0" min="0" step="0.01" required>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="payment-method">Forma de Pago</label>
+                            <div class="input-wrap">
+                                <i data-lucide="credit-card"></i>
+                                <select id="payment-method" class="custom-select">
+                                    <option value="efectivo">Efectivo</option>
+                                    <option value="transferencia">Transferencia</option>
+                                    <option value="tarjeta_debito">Tarjeta de Débito</option>
+                                    <option value="tarjeta_credito">Tarjeta de Crédito</option>
+                                    <option value="seña">Seña / Depósito</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="employee">Realizado por</label>
+                            <div class="input-wrap">
+                                <i data-lucide="user-check"></i>
+                                <select id="employee" class="custom-select">
+                                    <!-- Llenado por JS dinámicamente -->
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Campos de Egreso (ocultos inicialmente) -->
+                    <div class="form-grid hidden" id="expense-fields">
+                         <div class="form-group" style="grid-column: span 2;">
+                            <label for="expense-detail">Detalle del Retiro / Gasto</label>
+                            <div class="input-wrap">
+                                <i data-lucide="file-minus"></i>
+                                <input type="text" id="expense-detail" placeholder="Ej: Compra de insumos, Pago servicios...">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="expense-amount">Monto Saliente ($)</label>
+                            <div class="input-wrap">
+                                <i data-lucide="dollar-sign"></i>
+                                <input type="number" id="expense-amount" placeholder="0" min="1" step="0.01">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Sub-método cuando se selecciona Seña -->
+                    <div class="hidden" id="seña-method-row" style="padding: 0 1.5rem; margin-bottom: 1rem;">
+                        <div class="form-alert" style="margin:0; background:rgba(96,165,250,0.08); border-color:rgba(96,165,250,0.3);">
+                            <i data-lucide="piggy-bank"></i>
+                            <div style="flex:1;">
+                                <div style="font-weight:600; margin-bottom:8px;">Seña/Depósito — ¿Cómo te pagaron?</div>
+                                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                                    <label class="seña-method-opt">
+                                        <input type="radio" name="seña_method" value="efectivo" checked> Efectivo
+                                    </label>
+                                    <label class="seña-method-opt">
+                                        <input type="radio" name="seña_method" value="transferencia"> Transferencia
+                                    </label>
+                                    <label class="seña-method-opt">
+                                        <input type="radio" name="seña_method" value="tarjeta_debito"> Tarjeta Débito
+                                    </label>
+                                    <label class="seña-method-opt">
+                                        <input type="radio" name="seña_method" value="tarjeta_credito"> Tarjeta Crédito
+                                    </label>
+                                </div>
+                                <p style="margin:8px 0 0; font-size: 0.8rem; color:var(--text-dim);">El monto quedará guardado a favor de la clienta para descontar en próximas visitas.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Sección Pago Mixto (2 métodos) -->
+                    <div style="padding: 0 1.5rem; margin-bottom: 1rem;" id="split-toggle-row">
+                        <label class="checkbox-label" style="color:var(--info); border-color:rgba(96,165,250,0.25); background:rgba(96,165,250,0.05);">
+                            <input type="checkbox" id="is-split-payment">
+                            Dividir cobro entre 2 métodos de pago
+                        </label>
+                    </div>
+                    <div class="hidden" id="split-payment-section" style="padding: 0 1.5rem 1rem; display:grid; grid-template-columns:1fr 1fr; gap:1.2rem;">
+                        <div class="form-group">
+                            <label>2do Monto ($)</label>
+                            <div class="input-wrap">
+                                <i data-lucide="dollar-sign"></i>
+                                <input type="number" id="split-amount" placeholder="0" min="0" step="0.01">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>2do Método de Pago</label>
+                            <div class="input-wrap">
+                                <i data-lucide="credit-card"></i>
+                                <select id="split-method" class="custom-select">
+                                    <option value="efectivo">Efectivo</option>
+                                    <option value="transferencia">Transferencia</option>
+                                    <option value="tarjeta_debito">Tarjeta de Débito</option>
+                                    <option value="tarjeta_credito">Tarjeta de Crédito</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Propina -->
+                    <div id="tip-section" style="padding: 0 1.5rem; margin-bottom: 1rem;">
+                        <label class="checkbox-label" style="color:var(--gold-400); border-color:rgba(234,179,8,0.25); background:rgba(234,179,8,0.05);">
+                            <input type="checkbox" id="is-tip">
+                            Agregar propina para la empleada
+                        </label>
+                        <div id="tip-fields" class="hidden" style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-top:10px;">
+                            <div class="form-group" style="margin:0;">
+                                <label>Monto propina ($)</label>
+                                <div class="input-wrap">
+                                    <i data-lucide="coins"></i>
+                                    <input type="number" id="tip-amount" placeholder="0" min="0" step="0.01">
+                                </div>
+                            </div>
+                            <div class="form-group" style="margin:0;">
+                                <label>Método de cobro</label>
+                                <div class="input-wrap">
+                                    <i data-lucide="credit-card"></i>
+                                    <select id="tip-method" class="custom-select">
+                                        <option value="efectivo">Efectivo</option>
+                                        <option value="digital">Digital (Transferencia)</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- CRM Context Alert (Discounting from Balance) -->
+                    <div class="form-alert hidden" id="discount-alert">
+                        <i data-lucide="star"></i>
+                        <div class="alert-content">
+                            <div><strong>Esta clienta tiene seña a favor: $<span id="deposit-amount-display">0</span></strong></div>
+                            <p style="margin:4px 0 6px;">Puedes aplicar este dinero automáticamente para la venta actual.</p>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="apply-discount">
+                                Aplicar seña a favor a esta venta (Se descontará el monto automáticamente).
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Pago Parcial / Deuda -->
+                    <div class="form-group" style="padding: 0 1.5rem; margin-bottom: 1rem;" id="partial-payment-section">
+                        <label class="checkbox-label" style="background: rgba(248,113,113,0.1); border-color: rgba(248,113,113,0.3); color: var(--danger);">
+                            <input type="checkbox" id="is-partial-payment">
+                            El cliente no pagará el total (Generar deuda en su perfil)
+                        </label>
+                        <div id="full-price-container" class="form-group hidden" style="margin-top: 10px;">
+                            <label for="full-service-price" style="color:var(--text-primary)">¿Cuánto queda debiendo? ($)</label>
+                            <div class="input-wrap">
+                                <i data-lucide="minus-circle"></i>
+                                <input type="number" id="full-service-price" placeholder="Ej: 500" min="1" step="0.01">
+                            </div>
+                            <p style="font-size:0.75rem; color:var(--text-dim); margin-top:0.4rem;">
+                                El monto ingresado se registrará como deuda pendiente.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div style="padding: 0 1.5rem 1.5rem; display: flex; justify-content: flex-end;">
+                        <button type="button" class="btn btn-primary" id="btn-save-transaction">
+                            <i data-lucide="check-circle"></i>
+                            <span>Registrar en Caja</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Transactions Table -->
+            <div class="card table-card">
+                <div class="card-header">
+                    <h2 class="card-title">
+                        <i data-lucide="list"></i> Movimientos del Día
+                    </h2>
+                </div>
+                <div class="table-responsive">
+                    <table id="sales-table">
+                        <thead>
+                            <tr>
+                                <th>Hora</th>
+                                <th>Cliente</th>
+                                <th>Concepto</th>
+                                <th>Pago / Tipo</th>
+                                <th class="text-right">Monto</th>
+                            </tr>
+                        </thead>
+                        <tbody id="today-transactions-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══════════ VIEW: CLIENTS (CRM) ═══════════ -->
+        <section class="view-section" id="view-clients">
+            <div class="card">
+                <div class="card-header" style="flex-wrap: wrap; gap: 1rem;">
+                    <div style="display: flex; gap: 1rem; align-items: center; flex: 1;">
+                        <h2 class="card-title" style="white-space: nowrap;">
+                            <i data-lucide="users"></i> Directorio
+                        </h2>
+                        <div class="input-wrap search-bar">
+                            <i data-lucide="search"></i>
+                            <input type="text" id="search-client-table" placeholder="Buscar por nombre o teléfono...">
+                        </div>
+                    </div>
+                    <div class="card-actions" style="display:flex;gap:0.6rem;">
+                        <button class="btn btn-ghost btn-sm" id="btn-export-csv" style="border-color:rgba(96,165,250,0.4);color:var(--info);">
+                            <i data-lucide="download"></i> Exportar Meta
+                        </button>
+                        <button class="btn btn-primary btn-sm" id="btn-new-client">
+                            <i data-lucide="user-plus"></i> Ingresar Cliente
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="table-responsive">
+                    <table id="clients-table">
+                        <thead>
+                            <tr>
+                                <th>Perfil de Clienta</th>
+                                <th>Teléfono</th>
+                                <th>Estado Financiero</th>
+                                <th>Acción</th>
+                            </tr>
+                        </thead>
+                        <tbody id="clients-tbody">
+                            <!-- JS populated -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══════════ VIEW: ANALYTICS ═══════════ -->
+        <section class="view-section" id="view-analytics">
+            <div class="analytics-tabs" style="margin-bottom: 1.5rem; display:flex; gap: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem;">
+                <button class="tab-btn active" data-tab="stats-main" style="background:none; border:none; color:var(--text-dim); padding:8px 16px; cursor:pointer; font-weight:600; font-size:0.9rem;" onclick="switchAnalyticsTab('stats-main')">Estadísticas</button>
+                <button class="tab-btn" data-tab="stats-closures" style="background:none; border:none; color:var(--text-dim); padding:8px 16px; cursor:pointer; font-weight:600; font-size:0.9rem;" onclick="switchAnalyticsTab('stats-closures')">Historial de Cierres</button>
+            </div>
+
+            <div id="tab-stats-main" class="tab-content active">
+                <div class="stats-grid">
+                    <!-- Stats summary cards -->
+                    <div class="stat-card">
+                        <div class="stat-label">Ingresos Totales (Mes)</div>
+                        <div class="stat-value" id="stat-income-month">$0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Citas Realizadas</div>
+                        <div class="stat-value" id="stat-appointments-count">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Nuevos Clientes</div>
+                        <div class="stat-value" id="stat-new-clients">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Ticket Promedio</div>
+                        <div class="stat-value" id="stat-avg-ticket">$0</div>
+                    </div>
+                </div>
+
+                <div class="charts-grid">
+                    <div class="card">
+                        <div class="card-header"><h2 class="card-title"><i data-lucide="trending-up"></i> Flujo de Ingresos</h2></div>
+                        <div class="card-body" style="padding:1.5rem;"><canvas id="revenueChart" style="height:300px;"></canvas></div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header"><h2 class="card-title"><i data-lucide="pie-chart"></i> Métodos de Pago</h2></div>
+                        <div class="card-body" style="padding:1.5rem;"><canvas id="paymentChart" style="height:300px;"></canvas></div>
+                    </div>
+                </div>
+
+                <div class="charts-grid">
+                    <div class="card">
+                        <div class="card-header"><h2 class="card-title"><i data-lucide="crown"></i> Clientas Frecuentes</h2></div>
+                        <div class="card-body" style="padding:1.5rem;"><ul class="ranking-list" id="ranking-clients"></ul></div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header"><h2 class="card-title"><i data-lucide="scissors"></i> Servicios Populares</h2></div>
+                        <div class="card-body" style="padding:1.5rem;"><ul class="ranking-list" id="ranking-services"></ul></div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="tab-stats-closures" class="tab-content hidden">
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title"><i data-lucide="archive"></i> Registros de Cierre de Caja</h2>
+                    </div>
+                    <div class="card-body table-responsive" style="padding:0;">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Fecha</th>
+                                    <th>Ingresos</th>
+                                    <th>Egresos</th>
+                                    <th>Efectivo</th>
+                                    <th>Digital</th>
+                                    <th>Total</th>
+                                    <th class="text-right">Nota</th>
+                                </tr>
+                            </thead>
+                            <tbody id="closures-history-tbody">
+                                <!-- JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══════════ VIEW: CONFIGURACIÓN ═══════════ -->
+        <section class="view-section" id="view-settings">
+            <div class="dashboard-grid">
+                
+                <!-- Gestión de Servicios -->
+                <div class="card" style="grid-column: span 1;">
+                    <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+                        <h2 class="card-title"><i data-lucide="scissors"></i> Catálogo de Servicios</h2>
+                        <button class="btn btn-primary btn-sm" onclick="openServiceModal()"><i data-lucide="plus"></i> Nuevo</button>
+                    </div>
+                    <div class="card-body" style="padding: 1.5rem;">
+                        <div style="max-height: 350px; overflow-y:auto; padding-right:5px;">
+                            <ul class="task-list" id="settings-services-list">
+                                <!-- Llenado por JS -->
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Gestión de Empleadas -->
+                <div class="card" style="grid-column: span 1;">
+                    <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+                        <h2 class="card-title"><i data-lucide="users"></i> Staff</h2>
+                        <button class="btn btn-primary btn-sm" onclick="openEmployeeModal()"><i data-lucide="plus"></i> Nuevo</button>
+                    </div>
+                    <div class="card-body" style="padding: 1.5rem;">
+                        <div style="max-height: 350px; overflow-y:auto; padding-right:5px;">
+                            <ul class="task-list" id="settings-employees-list">
+                                <!-- Llenado por JS -->
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+                <!-- Configuración del Negocio (Horarios y Agenda) -->
+                <div class="card" style="grid-column: span 2;">
+                    <div class="card-header">
+                        <h2 class="card-title"><i data-lucide="calendar-clock"></i> Configuración de Agenda</h2>
+                    </div>
+                    <div class="card-body" style="padding:1.5rem;">
+                        <div class="form-grid" style="grid-template-columns: 1fr 1fr; padding:0;">
+                            <div class="form-group">
+                                <label>Horario de apertura</label>
+                                <div class="input-wrap"><i data-lucide="sunrise"></i><select id="cfg-open-time" class="custom-select time-select"></select></div>
+                            </div>
+                            <div class="form-group">
+                                <label>Horario de cierre</label>
+                                <div class="input-wrap"><i data-lucide="sunset"></i><select id="cfg-close-time" class="custom-select time-select"></select></div>
+                            </div>
+                            <div class="form-group">
+                                <label>Inicio de almuerzo (opcional)</label>
+                                <div class="input-wrap"><i data-lucide="coffee"></i><select id="cfg-lunch-start" class="custom-select time-select"><option value="">Ninguno</option></select></div>
+                            </div>
+                            <div class="form-group">
+                                <label>Fin de almuerzo (opcional)</label>
+                                <div class="input-wrap"><i data-lucide="coffee"></i><select id="cfg-lunch-end" class="custom-select time-select"><option value="">Ninguno</option></select></div>
+                            </div>
+                        </div>
+                        <div class="form-group" style="margin-top:1rem;">
+                            <label>Días cerrados</label>
+                            <div id="cfg-closed-days" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;">
+                                <!-- Poblado por JS con checkboxes -->
+                            </div>
+                        </div>
+                        <div class="form-group" style="margin-top:1rem;">
+                            <label>Formato de hora</label>
+                            <select id="cfg-time-format" class="custom-select">
+                                <option value="24h">24 hs</option>
+                                <option value="12h">12 hs (AM/PM)</option>
+                            </select>
+                        </div>
+                        <hr style="border:none;border-top:1px solid var(--border);margin:1.2rem 0;">
+                        <h4 style="margin:0 0 .8rem 0;font-size:.9rem;color:var(--text-dim);">Bloquear franjas específicas</h4>
+                        <div class="form-grid" style="grid-template-columns: 1fr 1fr 1fr 1.5fr 1.5fr auto; padding:0;gap:8px;align-items:end;">
+                            <div class="form-group"><label style="font-size:.75rem;">Fecha</label><input type="date" id="cfg-block-date"></div>
+                            <div class="form-group"><label style="font-size:.75rem;">Desde</label><select id="cfg-block-start" class="custom-select time-select"></select></div>
+                            <div class="form-group"><label style="font-size:.75rem;">Hasta</label><select id="cfg-block-end" class="custom-select time-select"></select></div>
+                            <div class="form-group"><label style="font-size:.75rem;">Aplica a</label>
+                                <select id="cfg-block-employee">
+                                    <option value="">Todo el local</option>
+                                    <!-- Empleadas pobladas por JS -->
+                                </select>
+                            </div>
+                            <div class="form-group"><label style="font-size:.75rem;">Motivo</label><input type="text" id="cfg-block-reason" placeholder="Opcional"></div>
+                            <button type="button" class="btn btn-primary btn-sm" id="btn-add-block"><i data-lucide="plus"></i></button>
+                        </div>
+                        <ul id="cfg-blocked-list" class="task-list" style="margin-top:.8rem;"></ul>
+                        <div style="display:flex;gap:.8rem;margin-top:1.2rem;flex-wrap:wrap;">
+                            <button type="button" class="btn btn-primary" id="btn-save-business-cfg">
+                                <i data-lucide="save"></i> Guardar Configuración
+                            </button>
+                            <button type="button" class="btn btn-ghost btn-sm" id="btn-reset-business-cfg" style="color:var(--text-dim);">
+                                <i data-lucide="rotate-ccw"></i> Restaurar predeterminados
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Configuración IA -->
+                <div class="card" style="grid-column: span 2;">
+                    <div class="card-header">
+                        <h2 class="card-title"><i data-lucide="bot"></i> Asistente IA</h2>
+                    </div>
+                    <div class="card-body" style="padding:1.5rem;">
+                        <div class="form-group">
+                            <label>Clave API de Anthropic (Claude)</label>
+                            <div class="input-wrap">
+                                <i data-lucide="key"></i>
+                                <input type="password" id="ai-api-key-input" placeholder="sk-ant-..." autocomplete="off">
+                            </div>
+                            <p style="font-size:0.78rem;color:var(--text-dim);margin-top:6px;">Conseguila en console.anthropic.com → API Keys. Se guarda localmente en este dispositivo.</p>
+                        </div>
+                        <button class="btn btn-primary btn-sm" id="btn-save-api-key" style="margin-top:1rem;">
+                            <i data-lucide="save"></i> Guardar Clave
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- ═══════════════════ MODALS ═══════════════════ -->
+
+    <!-- Modal Cita (Agenda) -->
+    <div class="modal-overlay" id="modal-appointment">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="apt-modal-title">Agendar Cita</h2>
+                <button class="modal-close-btn" id="modal-apt-close"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <form id="appointment-form">
+                    <div class="form-group" style="position: relative;">
+                        <label>Buscar Clienta (Requerido)</label>
+                        <div class="input-wrap">
+                            <i data-lucide="search"></i>
+                            <input type="text" id="apt-client-name" placeholder="Ej: Marcela Silva" required autocomplete="off">
+                        </div>
+                        <div class="autocomplete-dropdown" id="apt-client-dropdown"></div>
+                    </div>
+                    
+                    <div class="form-alert hidden" id="apt-client-alert" style="margin: 1rem 0;">
+                        <!-- JS inyecta insignias de deuda o seña de la clienta al seleccionarla -->
+                    </div>
+
+                    <div class="form-grid" style="grid-template-columns: 1fr 1fr; padding:0; margin-top: 1rem;">
+                        <div class="form-group">
+                            <label>Día</label>
+                            <div class="input-wrap">
+                                <i data-lucide="calendar"></i>
+                                <input type="date" id="apt-date" required>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Hora</label>
+                            <div class="input-wrap">
+                                <i data-lucide="clock"></i>
+                                <select id="apt-time" class="custom-select time-select" required></select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 1.2rem;">
+                        <label style="display:flex;justify-content:space-between;align-items:center;">
+                            Servicio Estimado
+                            <button type="button" id="btn-apt-quick-service" style="font-size:0.7rem;color:var(--violet-300);background:none;border:none;cursor:pointer;padding:0;font-family:inherit;">+ Nuevo servicio</button>
+                        </label>
+                        <div class="input-wrap">
+                            <i data-lucide="scissors"></i>
+                            <select id="apt-service" class="custom-select">
+                                <option value="">Sin especificar</option>
+                                <!-- Poblado dinámicamente por JS -->
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 1.2rem;">
+                        <label>Atendida por</label>
+                        <div class="input-wrap">
+                            <i data-lucide="user-check"></i>
+                            <select id="apt-employee" class="custom-select">
+                                <option value="">Sin asignar</option>
+                                <!-- Poblado dinámicamente por JS -->
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 1.2rem;">
+                        <label>Notas Privadas de la Cita</label>
+                        <textarea class="textarea-custom" id="apt-notes" rows="3" placeholder="Alergias, fórmulas, cosas a preparar..."></textarea>
+                    </div>
+
+                    <div style="margin-top: 1.5rem; display: flex; justify-content: flex-end;">
+                        <button type="submit" class="btn btn-primary"><i data-lucide="save"></i> Guardar Cita</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- Client CRM Profile Modal -->
+    <div class="modal-overlay" id="client-modal">
+        <div class="modal modal-lg">
+            <div class="modal-header">
+                <h2>Ficha de Clienta</h2>
+                <button class="modal-close-btn" id="btn-close-modal">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+            
+            <form id="client-form" onsubmit="event.preventDefault();">
+                <div class="modal-body">
+                    <div class="profile-header-area">
+                        <div class="photo-uploader">
+                            <div class="photo-preview-wrap">
+                                <img src="" alt="" class="profile-photo hidden" id="crm-profile-photo">
+                                <div class="profile-initials" id="cm-initials"></div>
+                            </div>
+                            <button type="button" class="photo-upload-btn" id="btn-upload-photo" title="Cambiar foto de perfil">
+                                <i data-lucide="camera"></i>
+                            </button>
+                        </div>
+
+                        <div class="profile-basic-inputs">
+                            <div class="form-group" style="margin:0;">
+                                <label style="font-size:0.72rem;font-weight:700;color:var(--gold-400);text-transform:uppercase;letter-spacing:1px;">
+                                    Nombre completo <span style="color:var(--danger)">*</span>
+                                </label>
+                                <input type="text" id="cm-name" class="input-huge" placeholder="Ej: María González" required
+                                    style="border-bottom: 2px solid var(--border-subtle); width:100%;">
+                            </div>
+                            <div class="input-wrap">
+                                <i data-lucide="phone"></i>
+                                <input type="text" id="cm-phone" placeholder="Teléfono o WhatsApp">
+                            </div>
+                            <div class="input-wrap">
+                                <i data-lucide="instagram"></i>
+                                <input type="text" id="cm-ig" placeholder="Usuario de Instagram">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="margin-top:1rem;" id="crm-badge-balance" class="badge hidden"></div>
+
+                    <div class="form-grid" style="grid-template-columns: 1fr 1fr; margin-top: 1.5rem; padding:0;">
+                        <div class="form-group">
+                            <label>Fecha de Cumpleaños</label>
+                            <div class="input-wrap">
+                                <i data-lucide="gift"></i>
+                                <input type="date" id="cm-birthday">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 1.5rem;">
+                        <label>Notas, Tinturas y Acuerdos (Privado)</label>
+                        <textarea class="textarea-custom" id="cm-notes" rows="4" placeholder="Ej: Usa color castaño claro (Fórmula: 6.0 + 20vol). Alérgica a X producto."></textarea>
+                    </div>
+
+                    <!-- Historial de Visitas -->
+                    <div id="cm-history-section" class="hidden" style="margin-top:1.5rem;">
+                        <label style="font-size:0.78rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;">Historial de Visitas</label>
+                        <div id="cm-history-list" style="margin-top:0.8rem; display:flex; flex-direction:column; gap:6px; max-height:220px; overflow-y:auto;"></div>
+                    </div>
+
+                    <!-- Archivos y Fotos de Trabajo -->
+                    <div id="cm-files-section" class="hidden" style="margin-top:1.5rem; padding-top: 1rem; border-top: 1px solid var(--border-subtle);">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <label style="font-size:0.78rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;">Fotos de Trabajo / Archivos</label>
+                            <button type="button" class="btn btn-ghost btn-sm" id="btn-add-client-file" style="padding: 2px 8px; font-size: 0.7rem; border-color: var(--violet-400);">
+                                <i data-lucide="plus" style="width:12px;height:12px"></i> Subir Foto/Archivo
+                            </button>
+                        </div>
+                        <div id="cm-files-list" class="cm-files-grid"></div>
+                    </div>
+                </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-primary" id="btn-save-client">
+                        <i data-lucide="save"></i>
+                        <span>Guardar Perfil</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal Empleada (Staff) -->
+    <div class="modal-overlay" id="modal-employee">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="employee-modal-title">Staff</h2>
+                <button class="modal-close-btn" id="modal-emp-close"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <form id="fm-employee">
+                    <input type="hidden" id="emp-id">
+                    <div class="form-group">
+                        <label>Nombre de la Funcionaria</label>
+                        <div class="input-wrap">
+                            <i data-lucide="user"></i>
+                            <input type="text" id="emp-name" placeholder="Ej: Sabrina" required>
+                        </div>
+                    </div>
+                    
+                    <div class="form-grid" style="grid-template-columns: 1fr 1fr; margin-top: 1rem; padding:0;">
+                        <div class="form-group">
+                            <label>Fecha de Ingreso</label>
+                            <div class="input-wrap">
+                                <i data-lucide="calendar"></i>
+                                <input type="date" id="emp-join-date">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Día de Pago (1-31)</label>
+                            <div class="input-wrap">
+                                <i data-lucide="calendar-check"></i>
+                                <input type="number" id="emp-pay-day" min="1" max="31" placeholder="Ej: 15">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-grid" style="grid-template-columns: 1fr 1fr; margin-top: 1rem; padding:0;">
+                        <div class="form-group">
+                            <label>Propinas Acumuladas ($)</label>
+                            <div class="input-wrap">
+                                <i data-lucide="heart"></i>
+                                <input type="number" id="emp-tips" placeholder="0" min="0">
+                            </div>
+                        </div>
+                        <div class="form-group" style="padding: 0;">
+                            <label>Adelantos / Saldo Pendiente ($)</label>
+                            <div class="input-wrap">
+                                <i data-lucide="trending-down"></i>
+                                <input type="number" id="emp-advances" placeholder="0">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="modal-footer" style="margin-top: 2rem;">
+                        <button type="submit" class="btn btn-primary" style="width: 100%;">
+                            <i data-lucide="save"></i>
+                            <span>Guardar Perfil</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Servicio -->
+    <div class="modal-overlay" id="modal-service">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="service-modal-title">Nuevo Servicio</h2>
+                <button class="modal-close-btn" id="modal-srv-close"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <form id="fm-service">
+                    <input type="hidden" id="srv-id">
+                    <div class="form-group">
+                        <label>Nombre del Servicio</label>
+                        <div class="input-wrap">
+                            <i data-lucide="scissors"></i>
+                            <input type="text" id="srv-name" placeholder="Ej: Corte de Cabello" required>
+                        </div>
+                    </div>
+                    
+                    <div class="form-grid" style="grid-template-columns: 1fr 1fr; margin-top: 1rem; padding:0;">
+                        <div class="form-group">
+                            <label>Tipo de Precio</label>
+                            <div class="input-wrap">
+                                <i data-lucide="tag"></i>
+                                <select id="srv-type" class="custom-select">
+                                    <option value="fijo">Precio Fijo</option>
+                                    <option value="variable">Precio Variable</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Monto ($)</label>
+                            <div class="input-wrap">
+                                <i data-lucide="dollar-sign"></i>
+                                <input type="number" id="srv-price" placeholder="Monto" min="0">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group" style="margin-top:1rem;">
+                        <label>Duración estimada (minutos) <span style="color:var(--text-dim);font-size:.75rem;">— Opcional</span></label>
+                        <div class="input-wrap">
+                            <i data-lucide="timer"></i>
+                            <input type="number" id="srv-duration" placeholder="Ej: 60" min="5" step="5">
+                        </div>
+                        <p style="font-size:.72rem;color:var(--text-dim);margin-top:4px;">Si no se especifica, se pedirá al seleccionar la cita.</p>
+                    </div>
+
+                    <div class="modal-footer" style="margin-top: 2rem;">
+                        <button type="submit" class="btn btn-primary" style="width: 100%;">
+                            <i data-lucide="save"></i>
+                            <span>Guardar Servicio</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- Modal Rápido: Crear Nueva Clienta desde Caja -->
+    <div class="modal-overlay" id="modal-quick-client">
+        <div class="modal" style="max-width:420px;">
+            <div class="modal-header">
+                <h2>Nueva Clienta Rápida</h2>
+                <button class="modal-close-btn" id="qc-close"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Nombre *</label>
+                    <div class="input-wrap"><i data-lucide="user"></i><input type="text" id="qc-name" placeholder="Ej: María González"></div>
+                </div>
+                <div class="form-group" style="margin-top:1rem;">
+                    <label>Teléfono / WhatsApp</label>
+                    <div class="input-wrap"><i data-lucide="phone"></i><input type="text" id="qc-phone" placeholder="Ej: 099 123 456"></div>
+                </div>
+                <div class="form-group" style="margin-top:1rem;">
+                    <label>Instagram</label>
+                    <div class="input-wrap"><i data-lucide="instagram"></i><input type="text" id="qc-ig" placeholder="@usuario"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost btn-sm" id="qc-cancel">Cancelar</button>
+                <button class="btn btn-primary btn-sm" id="qc-save"><i data-lucide="user-plus"></i> Crear y Seleccionar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Rápido: Crear Nuevo Servicio desde Caja -->
+    <div class="modal-overlay" id="modal-quick-service">
+        <div class="modal" style="max-width:380px;">
+            <div class="modal-header">
+                <h2>Nuevo Servicio Rápido</h2>
+                <button class="modal-close-btn" id="qs-close"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Nombre del Servicio *</label>
+                    <div class="input-wrap"><i data-lucide="scissors"></i><input type="text" id="qs-name" placeholder="Ej: Coloración"></div>
+                </div>
+                <div class="form-group" style="margin-top:1rem;">
+                    <label>Precio ($) — dejá vacío si es variable</label>
+                    <div class="input-wrap"><i data-lucide="dollar-sign"></i><input type="number" id="qs-price" placeholder="0" min="0"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost btn-sm" id="qs-cancel">Cancelar</button>
+                <button class="btn btn-primary btn-sm" id="qs-save"><i data-lucide="plus"></i> Crear y Seleccionar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Cierre de Caja -->
+    <!-- Modal Duración de Servicio -->
+    <div class="modal-overlay" id="modal-service-duration">
+        <div class="modal" style="max-width:380px;">
+            <div class="modal-header">
+                <h2 id="srvdur-title">Duración del Servicio</h2>
+                <button class="modal-close-btn" id="modal-srvdur-close"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body" style="padding:1.5rem;">
+                <p id="srvdur-desc" style="color:var(--text-dim);font-size:.88rem;margin:0 0 1rem;"></p>
+                <div class="form-group">
+                    <label>Duración en minutos</label>
+                    <div class="input-wrap"><i data-lucide="timer"></i><input type="number" id="srvdur-input" min="5" step="5" placeholder="Ej: 60"></div>
+                </div>
+                <label class="checkbox-label" style="margin-top:.8rem;font-size:.82rem;">
+                    <input type="checkbox" id="srvdur-persist"> Guardar para todos los usos futuros de este servicio
+                </label>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-ghost" id="srvdur-cancel">Omitir</button>
+                <button type="button" class="btn btn-primary" id="srvdur-confirm"><i data-lucide="check"></i> Confirmar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Detalle de Movimiento -->
+    <div class="modal-overlay" id="modal-transaction-detail">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Detalle del Movimiento</h2>
+                <button class="modal-close-btn" id="modal-txdetail-close"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body" id="txdetail-body" style="padding:1.5rem;">
+                <!-- Llenado por JS -->
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="modal-cierre-caja">
+        <div class="modal modal-lg">
+            <div class="modal-header">
+                <h2 style="font-family:'Playfair Display',serif;">Resumen de Cierre de Caja</h2>
+                <button class="modal-close-btn" id="modal-cierre-close"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body" id="cierre-body">
+                <!-- Llenado por JS -->
+            </div>
+            <div class="modal-footer" style="gap:0.8rem; flex-wrap:wrap;">
+                <button class="btn btn-ghost btn-sm" id="btn-cierre-whatsapp" style="border-color:rgba(74,222,128,0.4);color:var(--success);">
+                    <i data-lucide="message-circle"></i> Compartir por WhatsApp
+                </button>
+                <button class="btn btn-primary btn-sm" id="btn-cierre-cerrar">
+                    <i data-lucide="check"></i> Listo
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Floating AI Chat Button -->
+    <button class="ai-fab" id="btn-ai-chat" title="Asistente IA Violet">
+        <i data-lucide="bot"></i>
+    </button>
+
+    <!-- Modal Chat IA -->
+    <div class="modal-overlay" id="modal-ai-chat">
+        <div class="modal modal-lg" style="max-width:600px; display:flex; flex-direction:column; height:80vh;">
+            <div class="modal-header">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,var(--violet-500),var(--gold-500));display:flex;align-items:center;justify-content:center;">
+                        <i data-lucide="bot" style="width:18px;height:18px;color:white;"></i>
+                    </div>
+                    <div>
+                        <div style="font-weight:700;">Violet IA</div>
+                        <div style="font-size:0.72rem;color:var(--text-dim);">Asistente del negocio</div>
+                    </div>
+                </div>
+                <button class="modal-close-btn" id="modal-ai-close"><i data-lucide="x"></i></button>
+            </div>
+            <div id="ai-messages" style="flex:1;overflow-y:auto;padding:1.2rem;display:flex;flex-direction:column;gap:0.8rem;">
+                <div class="ai-msg ai-msg-bot">
+                    <span>Hola Patricia 👋 Soy tu asistente. Podés preguntarme sobre las ventas del día, clientas con deuda, servicios más populares, o cualquier cosa del negocio.</span>
+                </div>
+            </div>
+            <div style="padding:1rem;border-top:1px solid var(--border-subtle);display:flex;gap:0.6rem;">
+                <input type="text" id="ai-input" placeholder="Preguntame algo sobre el negocio..." style="flex:1;padding:0.7rem 1rem;background:var(--bg-input);border:1px solid var(--border-subtle);border-radius:var(--radius-sm);color:var(--text-primary);font-family:inherit;outline:none;">
+                <button class="btn btn-primary btn-sm" id="btn-ai-send" style="padding:0.7rem 1.2rem;">
+                    <i data-lucide="send"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts del Sistema -->
+    <script src="config.js"></script>
+    <script src="state.js"></script>
+    <script src="validation.js"></script>
+    <script src="auth.js"></script>
+    <script src="supabase-helpers.js"></script>
+    <script src="clients.js"></script>
+    <script src="pos.js"></script>
+    <script src="pos.dashboard.js"></script>
+    <script src="pos.services.js"></script>
+    <script src="pos.config.js"></script>
+    <!-- Modal: Cierre de Caja (Formulario) -->
+    <div class="modal-overlay" id="modal-closure">
+        <div class="modal" style="max-width: 480px;">
+            <div class="modal-header">
+                <h2 class="modal-title">Cierre de Caja Diario</h2>
+                <button class="modal-close-btn" onclick="document.getElementById('modal-closure').classList.remove('open')"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <div style="background:rgba(91,58,138,0.1); border-radius:12px; padding:20px; text-align:center; margin-bottom:20px; border: 1px solid var(--border);">
+                    <div style="font-size:0.85rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:1px; margin-bottom:8px;">Total del Día</div>
+                    <div style="font-size:2.2rem; font-weight:800; color:var(--success);" id="closure-total-display">$0</div>
+                    <div style="font-size:0.8rem; color:var(--text-dim); margin-top:4px;" id="closure-date-display">21 de Abril, 2024</div>
+                </div>
+
+                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-bottom:20px;">
+                    <div style="background:rgba(0,0,0,0.2); padding:15px; border-radius:10px;">
+                        <div style="font-size:0.7rem; color:var(--text-dim); text-transform:uppercase;">Efectivo</div>
+                        <div style="font-size:1.1rem; font-weight:700; color:var(--text-primary);" id="closure-cash-display">$0</div>
+                    </div>
+                    <div style="background:rgba(0,0,0,0.2); padding:15px; border-radius:10px;">
+                        <div style="font-size:0.7rem; color:var(--text-dim); text-transform:uppercase;">Transf / Tarjetas</div>
+                        <div style="font-size:1.1rem; font-weight:700; color:var(--text-primary);" id="closure-digital-display">$0</div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Observaciones / Novedades</label>
+                    <textarea id="closure-note" placeholder="Escribe aquí si hubo algún descuadre o novedad importante..." style="min-height:80px;"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer" style="flex-direction:column; gap:10px;">
+                <button class="btn btn-primary" id="btn-confirm-closure" style="width:100%; height:50px; font-size:1rem;">
+                    <i data-lucide="check-circle"></i> Confirmar Cierre y Guardar
+                </button>
+                <p style="font-size:0.75rem; color:var(--text-dim); text-align:center;">Al cerrar la caja, se guardará un registro histórico de los totales actuales.</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Detalle de Cierre (Lectura) -->
+    <div class="modal-overlay" id="modal-closure-detail">
+        <div class="modal" style="max-width: 480px;">
+            <div class="modal-header">
+                <h2 class="modal-title">Detalle de Cierre</h2>
+                <button class="modal-close-btn" onclick="document.getElementById('modal-closure-detail').classList.remove('open')"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body" id="closure-detail-body">
+                <!-- JS -->
+            </div>
+        </div>
+    </div>
+</body>
+</html>
