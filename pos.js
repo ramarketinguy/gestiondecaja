@@ -16,6 +16,7 @@ let activeModal = null;
 let charts = {};
 let _pendingAptClientName = null;
 let _clientModalSavedCallback = null;
+let _reopenAgendaAfterSave = false;
 
 // getUserId() definido en state.js
 
@@ -1055,6 +1056,7 @@ function initAptClientAutocomplete() {
             dropdown.style.display = 'none';
             // Abrir modal de clienta con nombre pre-cargado, luego volver a la agenda
             _pendingAptClientName = typedName;
+            _reopenAgendaAfterSave = true;
             openClientModal(); // abre vacío
             document.getElementById('cm-name').value = typedName;
             // Callback: cuando se guarde la clienta, setearla en aptCurrentClient y mostrar badge
@@ -1533,8 +1535,6 @@ function openServiceDurationModal(srv) {
                 } else if (!error) {
                     showToast(`Duración ${mins} min guardada para "${srv.name}"`);
                 }
-            } else {
-                showToast(`Duración ${mins} min aplicada para esta sesión`, 'info');
             }
         }
         cleanup();
@@ -1669,10 +1669,7 @@ function initPOS() {
         } else {
             document.getElementById('amount').value = '';
         }
-        // Mostrar duración en POS si existe (informativo)
-        if (srv && srv.duration) {
-            showToast(`Duración estimada: ${srv.duration} min`, 'info');
-        }
+        // Duración solo informativa — no mostrar toast al registrar cobro
     });
 
     initPOSClientAutocomplete();
@@ -1891,7 +1888,7 @@ function initQuickModals() {
         if (error || !data?.[0]) { showToast('Error al crear servicio', 'error'); return; }
         const newSrv = data[0];
         db.services.push({ id: newSrv.id, name: newSrv.name, priceType: newSrv.price_type, price: parseFloat(newSrv.price) || null, duration: newSrv.duration ? parseInt(newSrv.duration) : null });
-        showToast(`Servicio "${name}" creado`);
+        showToast(`Servicio "${name}" creada`);
         closeQS();
         updateFormSelects(); // reconstruye custom selects con el nuevo servicio
         // Auto-seleccionar el nuevo servicio en POS y en Agenda
@@ -2117,11 +2114,14 @@ async function saveTransaction() {
            document.getElementById('expense-detail').value = '';
         }
         
-        // Log de pago en ficha de clienta
-        if (isIncome && tData[0].client_id) {
-            const fmt2 = n => Number(n).toLocaleString('es-UY');
-            addClientLog(tData[0].client_id, `💰 Pago $${fmt2(tData[0].amount)} — ${tData[0].detail || ''} (${tData[0].method}) por ${tData[0].employee || '?'}`);
-        }
+        // Log de pago en ficha de clienta — registrar CADA transacción con clienta
+        tData.forEach(txRow => {
+            if (txRow.client_id) {
+                const fmt2 = n => Number(n).toLocaleString('es-UY');
+                const type = txRow.is_income ? 'Ingreso' : 'Egreso';
+                addClientLog(txRow.client_id, `💳 ${type} $${fmt2(txRow.amount)} — ${txRow.detail || ''} (${txRow.method})`);
+            }
+        });
         updateStats();
         renderTransactionsTable();
         showToast('Movimiento registrado en caja.');
@@ -2345,7 +2345,7 @@ function openTransactionDetail(data) {
     if (t.isIncome && t.clientId) {
         contentHTML += `
             <div style="grid-column:span 2; margin-top: 1rem;">
-                <button type="button" onclick="openClientModal('${t.clientId}');document.getElementById('modal-transaction-detail').classList.remove('open');" class="btn btn-ghost btn-sm" style="width:100%; justify-content:center;">👤 Ver ficha de clienta</button>
+                <button type="button" onclick="document.getElementById('modal-transaction-detail').classList.remove('open');setTimeout(()=>openClientModal('${t.clientId}'),150);" class="btn btn-ghost btn-sm" style="width:100%; justify-content:center;">👤 Ver ficha de clienta</button>
             </div>
         `;
     }
@@ -3088,10 +3088,12 @@ async function saveClient() {
     // Si veníamos desde el autocomplete de agenda, ejecutar callback y reabrir modal de cita
     if (_clientModalSavedCallback && savedClient) {
         const cb = _clientModalSavedCallback;
+        const shouldReopenAgenda = _reopenAgendaAfterSave;
         _clientModalSavedCallback = null;
+        _reopenAgendaAfterSave = false;
         cb(savedClient);
-        // Reabrir modal de agenda si estaba abierto antes
-        if (!document.getElementById('modal-appointment').classList.contains('open')) {
+        // Solo reabrir modal de agenda si vino desde allí (no desde caja u otro lugar)
+        if (shouldReopenAgenda && !document.getElementById('modal-appointment').classList.contains('open')) {
             openAgendarModal();
         }
     }
