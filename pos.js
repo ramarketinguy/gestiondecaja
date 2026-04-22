@@ -179,8 +179,20 @@ async function loadDataFromSupabase() {
             employeeId: a.employee_id
         })},
         { name: 'tasks', stateKey: 'tasks', order: { col: 'created_at', asc: true } },
-        { name: 'services', stateKey: 'services' },
-        { name: 'employees', stateKey: 'employees' },
+        { name: 'services', stateKey: 'services', transform: s => ({
+            ...s,
+            priceType: s.price_type || 'variable',
+            price: parseFloat(s.price) || null,
+            duration: s.duration ? parseInt(s.duration) : null
+        })},
+        { name: 'employees', stateKey: 'employees', transform: e => ({
+            ...e,
+            joinDate: e.join_date || null,
+            payDay: e.pay_day || null,
+            tips: parseFloat(e.tips) || 0,
+            advances: parseFloat(e.advances) || 0,
+            color: e.color || null
+        })},
         { name: 'closures', stateKey: 'closures', order: { col: 'closure_date', asc: false } },
         { name: 'client_files', stateKey: 'clientFiles', transform: f => ({ ...f, clientId: f.client_id }) }
     ];
@@ -225,6 +237,63 @@ async function loadDataFromSupabase() {
 // Ya no usamos saveData global porque gestionamos todo en la nube
 async function saveData() {
     console.warn("saveData() global desactivado.");
+}
+
+// Helper reutilizable para subir foto de cliente
+async function uploadClientPhoto(file, clientId) {
+    showToast('Subiendo foto...', 'info');
+    const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
+    const filePath = `clients/${clientId}_${Date.now()}.${ext}`;
+
+    const savePhotoLocally = (dataUrl) => {
+        try {
+            localStorage.setItem(`violet_photo_${clientId}`, dataUrl);
+        } catch(e) {
+            console.warn('localStorage lleno para foto:', e);
+        }
+        const c = db.clients.find(x => x.id == clientId);
+        if (c) c.photo_url = dataUrl;
+        const img = document.getElementById('crm-profile-photo');
+        const initials = document.getElementById('cm-initials');
+        if (img) { img.src = dataUrl; img.classList.remove('hidden'); }
+        if (initials) initials.classList.add('hidden');
+        showToast('Foto guardada localmente en este dispositivo');
+    };
+
+    try {
+        const { error: upErr } = await window.supabaseClient.storage
+            .from('client-photos')
+            .upload(filePath, file, { upsert: true, contentType: file.type });
+        if (upErr) {
+            // Fallback base64
+            const reader = new FileReader();
+            reader.onload = (ev) => savePhotoLocally(ev.target.result);
+            reader.readAsDataURL(file);
+            return;
+        }
+        const { data: urlData } = window.supabaseClient.storage.from('client-photos').getPublicUrl(filePath);
+        const photoUrl = urlData?.publicUrl;
+        if (!photoUrl) { showToast('No se pudo obtener URL pública', 'error'); return; }
+
+        const { error: dbErr } = await updateClientSafe(clientId, { photo_url: photoUrl });
+        if (dbErr) {
+            const reader = new FileReader();
+            reader.onload = (ev) => savePhotoLocally(ev.target.result);
+            reader.readAsDataURL(file);
+            return;
+        }
+
+        const c = db.clients.find(x => x.id == clientId);
+        if (c) c.photo_url = photoUrl;
+        const img = document.getElementById('crm-profile-photo');
+        const initials = document.getElementById('cm-initials');
+        if (img) { img.src = photoUrl; img.classList.remove('hidden'); }
+        if (initials) initials.classList.add('hidden');
+        showToast('Foto actualizada');
+    } catch (err) {
+        console.error(err);
+        showToast('Error inesperado: ' + err.message, 'error');
+    }
 }
 
 function refreshIcons() {
@@ -698,11 +767,18 @@ function renderDashboardDeudas() {
     </div>`;
 
     inDebt.forEach(c => {
+        // Buscar la transacción más antigua con deuda de esta clienta
+        const debtTx = db.transactions
+            .filter(t => t.clientId == c.id && t.isIncome && /deuda/i.test(t.detail))
+            .sort((a, b) => new Date(a.date) - new Date(b.date))[0];
+        const debtDate = debtTx ? new Date(debtTx.date).toLocaleDateString('es-UY', {day:'2-digit', month:'2-digit', year:'numeric'}) : '';
+        const debtSubtext = debtDate ? `desde el ${debtDate}` : `<i data-lucide="phone" style="width:12px;height:12px;vertical-align:middle"></i> ${c.phone || '-'}`;
+
         list.innerHTML += `
             <div class="widget-list-item" style="cursor:pointer;" onclick="openClientModal('${c.id}')">
                 <div class="info">
                     <span class="main-text">${c.name}</span>
-                    <span class="sub-text"><i data-lucide="phone" style="width:12px;height:12px;vertical-align:middle"></i> ${c.phone || '-'}</span>
+                    <span class="sub-text">${debtSubtext}</span>
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;">
                     <div style="color:var(--danger); font-weight:700;">$${fmt(c.debt)}</div>
@@ -847,6 +923,11 @@ function initAgenda() {
 }
 
 function openAgendarModal(preselectedDate = null, preselectedTime = null) {
+    // Si preselectedDate es un evento (ej. click), ignorarlo
+    if (preselectedDate && typeof preselectedDate !== 'string') {
+        preselectedDate = null;
+    }
+    
     document.getElementById('modal-appointment').classList.add('open');
     const today = new Date();
     const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
@@ -1211,7 +1292,6 @@ function renderAgendaSidePanel(dateStr) {
 
     // Horarios disponibles (slots libres) — clickeable para agendar rápido
     if (!isClosed && cfg.openTime && cfg.closeTime) {
-        const busy = new Set(apts.map(a => normTime(a.time)).filter(Boolean));
         const slots = [];
         const toMin = t => { const [h, mn] = t.split(':').map(n => parseInt(n)); return h*60 + mn; };
         const toStr = mm => `${String(Math.floor(mm/60)).padStart(2,'0')}:${String(mm%60).padStart(2,'0')}`;
@@ -1223,20 +1303,58 @@ function renderAgendaSidePanel(dateStr) {
         // Reserva temporal en curso
         const tempRes = (window.tempSlotReservation && window.tempSlotReservation.date === dateStr) ? window.tempSlotReservation.time : null;
         const isPastDate = dateStr < todayStr;
+        
+        const activeEmps = db.employees || [];
+        const maxConcurrent = activeEmps.length > 0 ? activeEmps.length : 1;
+
         for (let t = start; t < end; t += 30) {
             const inLunch = (lunchS !== null && t >= lunchS && t < lunchE);
             const inBlock = blocks.some(b => t >= toMin(b.start) && t < toMin(b.end));
             const ts = toStr(t);
-            const taken = busy.has(ts);
             const tempTaken = tempRes === ts;
-            if (!inLunch && !inBlock && !taken && !tempTaken && !isPastDate) slots.push(ts);
+
+            // Calcular ocupación considerando duraciones
+            let totalBusyCount = 0;
+            const busyEmpIds = [];
+            apts.forEach(a => {
+                if (!a.time) return;
+                const sTime = toMin(normTime(a.time));
+                const srv = db.services.find(s => s.name === a.service);
+                const duration = srv && srv.duration ? parseInt(srv.duration) : 30;
+                const eTime = sTime + duration;
+                
+                if (t >= sTime && t < eTime) {
+                    totalBusyCount++;
+                    if (a.employee_id) busyEmpIds.push(a.employee_id);
+                }
+            });
+
+            if (!inLunch && !inBlock && !tempTaken && !isPastDate) {
+                if (totalBusyCount < maxConcurrent) {
+                    let bgColor = 'rgba(52,211,153,0.12)';
+                    let borderColor = 'rgba(52,211,153,0.3)';
+                    let textColor = 'var(--success)';
+
+                    // Si hay alguien ocupado pero aún hay lugar, teñir con su color
+                    if (totalBusyCount > 0 && activeEmps.length > 0 && busyEmpIds.length > 0) {
+                        const busyEmp = activeEmps.find(e => e.id == busyEmpIds[0]);
+                        if (busyEmp && busyEmp.color) {
+                            textColor = busyEmp.color;
+                            bgColor = busyEmp.color + '20'; // ~12% opacity
+                            borderColor = busyEmp.color + '50'; // ~31% opacity
+                        }
+                    }
+
+                    slots.push({ time: ts, bgColor, borderColor, textColor });
+                }
+            }
         }
         html += `<h5 style="font-size:.75rem;color:var(--text-dim);text-transform:uppercase;margin:1rem 0 .4rem;">Horarios disponibles</h5>`;
         if (slots.length === 0) {
             html += `<div style="color:var(--text-dim);font-size:.8rem;">${isPastDate ? 'Fecha pasada.' : 'Sin huecos libres.'}</div>`;
         } else {
             html += `<div style="display:flex;flex-wrap:wrap;gap:4px;">` +
-                slots.map(s => `<button type="button" class="slot-btn" data-slot-date="${dateStr}" data-slot-time="${s}" style="padding:4px 10px;background:rgba(52,211,153,0.12);border:1px solid rgba(52,211,153,0.3);color:var(--success);border-radius:4px;font-size:.72rem;cursor:pointer;font-family:inherit;">${s}</button>`).join('') +
+                slots.map(s => `<button type="button" class="slot-btn" data-slot-date="${dateStr}" data-slot-time="${s.time}" style="padding:4px 10px;background:${s.bgColor};border:1px solid ${s.borderColor};color:${s.textColor};border-radius:4px;font-size:.72rem;cursor:pointer;font-family:inherit;">${s.time}</button>`).join('') +
                 `</div>`;
         }
     }
@@ -2445,90 +2563,38 @@ function initCRM() {
         document.body.appendChild(hiddenFileInput);
     }
 
+    // Variable temporal para foto en creación nueva
+    window.pendingClientPhoto = null;
+
     document.getElementById('btn-upload-photo').addEventListener('click', () => {
-        if (!activeModal) {
-            showToast('Guardá la clienta primero antes de subir foto', 'info');
-            return;
-        }
         hiddenFileInput.click();
     });
 
     hiddenFileInput.addEventListener('change', async (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
-        if (!activeModal) { showToast('Guardá la clienta primero', 'error'); return; }
-        if (file.size > 5 * 1024 * 1024) { showToast('La imagen excede 5MB', 'error'); return; }
+        if (file.size > 5 * 1024 * 1024) { showToast('La imagen excede 5MB', 'error'); hiddenFileInput.value = ''; return; }
 
-        showToast('Subiendo foto...', 'info');
-        const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
-        const filePath = `clients/${activeModal}_${Date.now()}.${ext}`;
-
-        // Helper: guardar foto localmente en localStorage como base64
-        const savePhotoLocally = (dataUrl) => {
-            try {
-                localStorage.setItem(`violet_photo_${activeModal}`, dataUrl);
-            } catch(e) {
-                // Si localStorage está lleno, comprimir un poco (reducir calidad)
-                console.warn('localStorage lleno para foto:', e);
-            }
-            const c = db.clients.find(x => x.id == activeModal);
-            if (c) c.photo_url = dataUrl;
-            const img = document.getElementById('crm-profile-photo');
-            const initials = document.getElementById('cm-initials');
-            img.src = dataUrl;
-            img.classList.remove('hidden');
-            if (initials) initials.classList.add('hidden');
-            showToast('Foto guardada localmente en este dispositivo');
-        };
-
-        try {
-            const { error: upErr } = await window.supabaseClient.storage
-                .from('client-photos')
-                .upload(filePath, file, { upsert: true, contentType: file.type });
-            if (upErr) {
-                // Fallback base64 si el bucket no existe o hay error de Storage
-                if (/bucket|not found|storage/i.test(upErr.message) || true) {
-                    const reader = new FileReader();
-                    reader.onload = (ev) => savePhotoLocally(ev.target.result);
-                    reader.readAsDataURL(file);
-                    hiddenFileInput.value = '';
-                    return;
-                }
-                showToast('Error subiendo foto: ' + upErr.message, 'error');
-                console.error(upErr);
-                hiddenFileInput.value = '';
-                return;
-            }
-            const { data: urlData } = window.supabaseClient.storage.from('client-photos').getPublicUrl(filePath);
-            const photoUrl = urlData?.publicUrl;
-            if (!photoUrl) { showToast('No se pudo obtener URL pública', 'error'); return; }
-
-            // Guardar URL en Supabase (clients.photo_url)
-            const { error: dbErr } = await updateClientSafe(activeModal, { photo_url: photoUrl });
-            if (dbErr) {
-                // Si falló guardar en Supabase, guardar localmente
-                const reader = new FileReader();
-                reader.onload = (ev) => savePhotoLocally(ev.target.result);
-                reader.readAsDataURL(file);
-                hiddenFileInput.value = '';
-                return;
-            }
-
-            // Actualizar UI con URL de Supabase
-            const c = db.clients.find(x => x.id == activeModal);
-            if (c) c.photo_url = photoUrl;
-            const img = document.getElementById('crm-profile-photo');
-            const initials = document.getElementById('cm-initials');
-            img.src = photoUrl;
-            img.classList.remove('hidden');
-            if (initials) initials.classList.add('hidden');
-            showToast('Foto actualizada');
-        } catch (err) {
-            console.error(err);
-            showToast('Error inesperado: ' + err.message, 'error');
-        } finally {
+        // Si no hay cliente guardado aún, guardar foto como preview temporal
+        if (!activeModal) {
+            window.pendingClientPhoto = file;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                const img = document.getElementById('crm-profile-photo');
+                const initials = document.getElementById('cm-initials');
+                img.src = ev.target.result;
+                img.classList.remove('hidden');
+                if (initials) initials.classList.add('hidden');
+                showToast('Foto seleccionada. Se guardará al crear la clienta.', 'info');
+            };
+            reader.readAsDataURL(file);
             hiddenFileInput.value = '';
+            return;
         }
+
+        // Flujo para clientes existentes
+        await uploadClientPhoto(file, activeModal);
+        hiddenFileInput.value = '';
     });
 
     // Input file oculto para archivos de trabajo
@@ -2755,7 +2821,7 @@ function openClientModal(clientId = null) {
                     bBadge.style.color = 'var(--info)';
                     bBadge.style.borderColor = 'var(--info)';
                 } else {
-                    const debtTxs = db.transactions.filter(t => t.clientId == c.id && t.detail && t.detail.includes('Generó Deuda'));
+                    const debtTxs = db.transactions.filter(t => t.clientId == c.id && t.detail && /deuda/i.test(t.detail));
                     let debtInfo = `Deuda pendiente: $${fmt(c.debt)}`;
                     if (debtTxs.length > 0) {
                         const debtDates = debtTxs.map(t => {
@@ -2815,19 +2881,22 @@ function renderClientHistory(clientId) {
     
     // 1. Mostrar Deudas Pendientes Específicas
     if (client && client.debt > 0) {
-        const debtTxs = db.transactions.filter(t => t.clientId == clientId && t.detail && t.detail.includes('Generó Deuda'));
-        debtTxs.forEach(t => {
-            const dateStr = new Date(t.date).toLocaleDateString('es-UY', { day:'2-digit', month:'2-digit', year:'numeric' });
-            list.innerHTML += `
-                <div style="display:flex;justify-content:space-between;align-items:center;padding:10px;background:var(--danger-bg);border-radius:var(--radius-sm);border:1px solid var(--danger);margin-bottom:8px;">
-                    <div>
-                        <div style="font-size:0.8rem;font-weight:700;color:var(--danger);">DEUDA PENDIENTE</div>
-                        <div style="font-size:0.72rem;color:var(--text-dim);">${dateStr} · Por servicio realizado</div>
-                    </div>
-                    <div style="font-weight:800;color:var(--danger);font-size:1rem;">$${fmt(t.amount)}</div>
+        const debtTxs = db.transactions.filter(t => t.clientId == clientId && t.isIncome && t.detail && /deuda/i.test(t.detail));
+        let dateInfo = "Fecha de generación desconocida";
+        if (debtTxs.length > 0) {
+            const dates = debtTxs.map(t => new Date(t.date).toLocaleDateString('es-UY', { day:'2-digit', month:'2-digit', year:'numeric' }));
+            dateInfo = `Generada: ${[...new Set(dates)].join(', ')}`;
+        }
+        
+        list.innerHTML += `
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px;background:var(--danger-bg);border-radius:var(--radius-sm);border:1px solid var(--danger);margin-bottom:8px;">
+                <div>
+                    <div style="font-size:0.8rem;font-weight:700;color:var(--danger);">DEUDA PENDIENTE ACTUAL</div>
+                    <div style="font-size:0.72rem;color:var(--text-dim);">${dateInfo}</div>
                 </div>
-            `;
-        });
+                <div style="font-weight:800;color:var(--danger);font-size:1rem;">$${fmt(client.debt)}</div>
+            </div>
+        `;
     }
 
     // 2. Historial de Servicios
@@ -2942,6 +3011,12 @@ async function saveClient() {
             return;
         }
         db.clients.push(newClients[0]);
+
+        // Subir foto pendiente si se seleccionó durante la creación
+        if (window.pendingClientPhoto && newClients[0].id) {
+            await uploadClientPhoto(window.pendingClientPhoto, newClients[0].id);
+            window.pendingClientPhoto = null;
+        }
     }
 
     btn.disabled = false;
@@ -3457,13 +3532,15 @@ function openEmployeeModal(id = null) {
         const emp = db.employees.find(x => x.id == id);
         if (emp) {
             document.getElementById('emp-name').value = emp.name;
-            document.getElementById('emp-join-date').value = emp.joinDate || '';
-            document.getElementById('emp-pay-day').value = emp.payDay || '';
+            document.getElementById('emp-join-date').value = emp.joinDate || emp.join_date || '';
+            document.getElementById('emp-pay-day').value = emp.payDay || emp.pay_day || '';
             document.getElementById('emp-tips').value = emp.tips || 0;
             document.getElementById('emp-advances').value = emp.advances || 0;
+            document.getElementById('emp-color').value = emp.color || '#7b52b5';
         }
     } else {
         document.getElementById('fm-employee').reset();
+        document.getElementById('emp-color').value = '#7b52b5';
     }
     modal.classList.add('open');
 }
@@ -3484,7 +3561,8 @@ async function saveEmployee() {
         join_date: document.getElementById('emp-join-date').value || null,
         pay_day: parseInt(document.getElementById('emp-pay-day').value) || null,
         tips: parseFloat(document.getElementById('emp-tips').value) || 0,
-        advances: parseFloat(document.getElementById('emp-advances').value) || 0
+        advances: parseFloat(document.getElementById('emp-advances').value) || 0,
+        color: document.getElementById('emp-color').value || '#7b52b5'
     };
 
     const submitBtn = document.querySelector('#fm-employee [type="submit"]');
@@ -3498,7 +3576,7 @@ async function saveEmployee() {
             return;
         }
         let emp = db.employees.find(x => x.id == editingEmployeeId);
-        if (emp) { emp.name = empData.name; emp.joinDate = empData.join_date; emp.payDay = empData.pay_day; emp.tips = empData.tips; emp.advances = empData.advances; }
+        if (emp) { emp.name = empData.name; emp.joinDate = empData.join_date; emp.payDay = empData.pay_day; emp.tips = empData.tips; emp.advances = empData.advances; emp.color = empData.color; }
         showToast('Funcionaria actualizada');
     } else {
         const { data, error } = await window.supabaseClient.from('employees').insert([empData]).select();
@@ -3507,7 +3585,7 @@ async function saveEmployee() {
             submitBtn.disabled = false;
             return;
         }
-        db.employees.push({ id: data[0].id, name: data[0].name, joinDate: data[0].join_date, payDay: data[0].pay_day, tips: parseFloat(data[0].tips) || 0, advances: parseFloat(data[0].advances) || 0 });
+        db.employees.push({ id: data[0].id, name: data[0].name, joinDate: data[0].join_date, payDay: data[0].pay_day, tips: parseFloat(data[0].tips) || 0, advances: parseFloat(data[0].advances) || 0, color: data[0].color || '#7b52b5' });
         showToast('Funcionaria agregada');
     }
 
@@ -3566,10 +3644,11 @@ function renderEmployeesList() {
         if (emp.payDay) subText.push('Pago: ' + emp.payDay);
         if (emp.tips) subText.push('Propinas: $' + emp.tips);
         if (emp.advances) subText.push('Adeuda: $' + emp.advances);
+        const empColor = emp.color || '#7b52b5';
 
         li.innerHTML = `
             <div style="flex:1;">
-                <span class="task-text"><i data-lucide="user" style="width:14px;height:14px;margin-right:5px;vertical-align:-2px"></i> ${emp.name}</span>
+                <span class="task-text"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${empColor};margin-right:6px;vertical-align:-1px;"></span><i data-lucide="user" style="width:14px;height:14px;margin-right:5px;vertical-align:-2px"></i> ${emp.name}</span>
                 ${subText.length > 0 ? `<div style="font-size:0.75rem; color:var(--text-dim); margin-left: 20px; margin-top:2px;">${subText.join(' | ')}</div>` : ''}
             </div>
             <div style="display:flex; gap: 5px;">
