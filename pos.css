@@ -317,15 +317,33 @@ tbody tr:hover { background: var(--bg-hover); }
 /* Modal CRM & Agenda */
 .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(6px); z-index: 200; align-items: center; justify-content: center; padding: 1rem; }
 .modal-overlay.open { display: flex; }
-.modal { background: var(--violet-800); border: 1px solid var(--border-card); border-radius: var(--radius-lg); width: 100%; max-width: 560px; max-height: 90vh; overflow-y: auto; box-shadow: var(--shadow-lg); }
+.modal { 
+    background: var(--violet-800); 
+    border: 1px solid var(--border-card); 
+    border-radius: var(--radius-lg); 
+    width: 100%; 
+    max-width: 560px; 
+    max-height: 90vh; 
+    box-shadow: var(--shadow-lg); 
+    display: flex; 
+    flex-direction: column; 
+    overflow: hidden; 
+}
+.modal form { 
+    display: flex; 
+    flex-direction: column; 
+    flex: 1; 
+    min-height: 0;
+    overflow: hidden; 
+}
 .modal-lg { max-width: 650px; }
 
-.modal-header { display: flex; padding: 1.3rem 1.5rem; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-subtle); }
+.modal-header { display: flex; padding: 1.3rem 1.5rem; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-subtle); flex-shrink: 0; }
 .modal-close-btn { background: none; border: none; color: var(--text-dim); cursor: pointer; padding: 4px; display: flex; align-items: center; justify-content: center; transition: all var(--transition-fast); }
 .modal-close-btn:hover { color: var(--gold-400); transform: rotate(90deg); }
 .modal-close-btn svg { width: 20px; height: 20px; }
-.modal-body { padding: 1.5rem; }
-.modal-footer { padding: 1rem 1.5rem; border-top: 1px solid var(--border-subtle); display: flex; justify-content: flex-end; gap: 0.8rem; }
+.modal-body { padding: 1.5rem; flex: 1; overflow-y: auto; min-height: 0; }
+.modal-footer { padding: 1rem 1.5rem; border-top: 1px solid var(--border-subtle); display: flex; justify-content: flex-end; gap: 0.8rem; flex-shrink: 0; }
 
 .profile-header-area { display: flex; gap: 1.5rem; align-items: center; }
 .photo-uploader { position: relative; width: 90px; height: 90px; flex-shrink: 0; }

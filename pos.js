@@ -191,7 +191,7 @@ async function loadDataFromSupabase() {
             payDay: e.pay_day || null,
             tips: parseFloat(e.tips) || 0,
             advances: parseFloat(e.advances) || 0,
-            color: e.color || null
+            color: e.color || localStorage.getItem(`violet_emp_color_${e.id}`) || '#7b52b5'
         })},
         { name: 'closures', stateKey: 'closures', order: { col: 'closure_date', asc: false } },
         { name: 'client_files', stateKey: 'clientFiles', transform: f => ({ ...f, clientId: f.client_id }) }
@@ -306,8 +306,7 @@ function refreshIcons() {
 // Inserta cliente; si Supabase no tiene columnas "instagram" u otras opcionales,
 // reintenta sin esos campos para evitar "Could not find column ... in schema cache".
 async function insertClientSafe(payload) {
-    const userId = getUserId();
-    if (userId) payload.user_id = userId;
+    // user_id no existe en tabla clients
     let { data, error } = await window.supabaseClient.from('clients').insert([payload]).select();
     if (error && error.message) {
         // Detecta "Could not find the 'X' column of 'clients'"
@@ -683,14 +682,12 @@ function renderDashboardTareas() {
         if(!inputRow.classList.contains('hidden')) input.focus();
     };
 
-        input.onkeypress = async (e) => {
+    input.onkeypress = async (e) => {
         if(e.key === 'Enter' && input.value.trim()) {
             const taskText = input.value.trim();
             input.value = '';
             input.disabled = true;
-            const userId = getUserId();
             const { data, error } = await window.supabaseClient.from('tasks').insert([{ 
-                user_id: userId,
                 text: taskText, 
                 completed: false 
             }]).select();
@@ -723,7 +720,7 @@ function renderDashboardTareas() {
     });
 
     // Events
-        document.querySelectorAll('.task-checkbox').forEach(cb => {
+    document.querySelectorAll('.task-checkbox').forEach(cb => {
         cb.onchange = async (e) => {
             const id = e.target.getAttribute('data-id');
             const task = db.tasks.find(x => x.id == id);
@@ -735,7 +732,7 @@ function renderDashboardTareas() {
         };
     });
 
-        document.querySelectorAll('.task-del').forEach(btn => {
+    document.querySelectorAll('.task-del').forEach(btn => {
         btn.onclick = async (e) => {
             const id = e.currentTarget.getAttribute('data-id');
             db.tasks = db.tasks.filter(x => x.id != id);
@@ -934,7 +931,19 @@ function openAgendarModal(preselectedDate = null, preselectedTime = null) {
     const dateInput = document.getElementById('apt-date');
     dateInput.value = preselectedDate || agendaMonthState.selectedDate || todayStr;
     dateInput.setAttribute('min', todayStr); // Bloquea fechas pasadas
-    document.getElementById('apt-time').value = preselectedTime || '';
+    
+    const timeInput = document.getElementById('apt-time');
+    if (timeInput) {
+        console.log(`[Agenda] Abriendo modal para: ${preselectedDate || todayStr} ${preselectedTime || 'Sin hora'}`);
+        timeInput.value = preselectedTime || '';
+        syncCustomSelect('apt-time');
+        
+        // Debug: Verificar si el valor se aplicó correctamente
+        if (preselectedTime && timeInput.value !== preselectedTime) {
+            console.warn(`[Agenda] No se pudo establecer la hora ${preselectedTime}. ¿Existe en el select?`);
+        }
+    }
+    
     // Asegurar que el select de servicio esté sincronizado visualmente
     const aptSel = document.getElementById('apt-service');
     if (aptSel) {
@@ -1112,24 +1121,41 @@ async function saveAppointment() {
         if (!aptCurrentClient) return;
     }
 
-    const userId = getUserId();
     const aptData = {
-        user_id: userId,
         client_id: aptCurrentClient.id,
         client_name: aptCurrentClient.name,
         apt_date: dateInput,
         apt_time: timeInput,
         service: serviceVal,
         notes: document.getElementById('apt-notes').value,
-        employee_id: aptEmployeeId
+        employee_id: aptEmployeeId,
+        user_id: getUserId()
     };
 
     showToast('Guardando cita...', 'info');
     let res;
-    if (editingAppointmentId) {
-        res = await window.supabaseClient.from('appointments').update(aptData).eq('id', editingAppointmentId).select();
-    } else {
-        res = await window.supabaseClient.from('appointments').insert([aptData]).select();
+    try {
+        if (editingAppointmentId) {
+            // Para update, no enviar user_id (es inmutable)
+            const updateData = { ...aptData };
+            delete updateData.user_id;
+            res = await window.supabaseClient.from('appointments').update(updateData).eq('id', editingAppointmentId).select();
+            if (res.error) {
+                // Retry sin campos problemáticos
+                const m = res.error.message?.match(/Could not find the '(\w+)' column/i);
+                if (m && m[1] && m[1] in updateData) {
+                    delete updateData[m[1]];
+                    console.warn(`[Cita] Columna '${m[1]}' no existe, reintentando sin ella.`);
+                    res = await window.supabaseClient.from('appointments').update(updateData).eq('id', editingAppointmentId).select();
+                }
+            }
+        } else {
+            res = await insertAppointmentSafe(aptData);
+        }
+    } catch (e) {
+        console.error('[Cita] Excepción:', e);
+        showToast('Error de conexión al guardar cita', 'error');
+        return;
     }
 
     if (!res.error && res.data) {
@@ -1155,8 +1181,8 @@ async function saveAppointment() {
         renderAgenda(dateInput);
         renderAgendaSidePanel(dateInput);
     } else {
-        console.error(res.error);
-        showToast('Error al guardar cita', 'error');
+        console.error('Error al guardar cita:', res.error);
+        showToast('Error al guardar cita: ' + (res.error?.message || 'Error desconocido'), 'error');
     }
 }
 
@@ -1580,7 +1606,7 @@ function initPOS() {
                 tipFields.classList.remove('hidden');
                 tipFields.style.display = 'grid';
             } else {
-                tipFields.classList.add('hidden');
+                tipFields.classList.remove('hidden');
                 tipFields.style.display = '';
             }
         });
@@ -1910,9 +1936,7 @@ async function saveTransaction() {
 
     document.getElementById('btn-save-transaction').disabled = true;
 
-    const userId = getUserId();
     const transactionSchema = {
-        user_id: userId,
         transaction_date: new Date().toISOString(),
         is_income: isIncome,
         amount: amount,
@@ -2027,7 +2051,29 @@ async function saveTransaction() {
     }
 
     // Insertar todo en una sola llamada
-    const { data: tData, error } = await window.supabaseClient.from('transactions').insert(inserts).select();
+    // Insertar con user_id usando helper seguro
+    const userId = getUserId();
+    if (userId) inserts.forEach(tx => { tx.user_id = userId; });
+    let tData = null, error = null;
+    try {
+        const result = await window.supabaseClient.from('transactions').insert(inserts).select();
+        tData = result.data;
+        error = result.error;
+        // Si falla por columna inexistente, reintentar sin ella
+        if (error && error.message) {
+            const m = error.message.match(/Could not find the '(\w+)' column/i);
+            if (m && m[1]) {
+                console.warn(`[Caja] Columna '${m[1]}' no existe, reintentando sin ella.`);
+                inserts.forEach(tx => { delete tx[m[1]]; });
+                const retry = await window.supabaseClient.from('transactions').insert(inserts).select();
+                tData = retry.data;
+                error = retry.error;
+            }
+        }
+    } catch (e) {
+        console.error('[Caja] Excepción al insertar:', e);
+        error = { message: e.message };
+    }
     document.getElementById('btn-save-transaction').disabled = false;
 
     if (tData && tData.length > 0) {
@@ -2438,9 +2484,7 @@ async function saveCashClosure() {
         }
     });
 
-    const userId = getUserId();
     const closureData = {
-        user_id: userId,
         closure_date: new Date().toISOString(),
         cash_amount: cache.ef,
         digital_amount: cache.digital,
@@ -2547,33 +2591,40 @@ function openClosureDetailModal(closureId) {
 // 8. CRM BASE DE DATOS CLIENTES
 // ==========================================
 function initCRM() {
+    if (window.crmInitialized) return;
+    window.crmInitialized = true;
+
     document.getElementById('btn-new-client').addEventListener('click', () => openClientModal());
     document.getElementById('btn-close-modal').addEventListener('click', closeClientModal);
     document.getElementById('btn-save-client').addEventListener('click', saveClient);
     document.getElementById('search-client-table').addEventListener('input', (e) => renderClientsTable(e.target.value));
     document.getElementById('btn-export-csv').addEventListener('click', exportClientesCSV);
-    // Input file oculto para subida de foto
-    let hiddenFileInput = document.getElementById('cm-photo-file');
-    if (!hiddenFileInput) {
-        hiddenFileInput = document.createElement('input');
-        hiddenFileInput.type = 'file';
-        hiddenFileInput.id = 'cm-photo-file';
-        hiddenFileInput.accept = 'image/*';
-        hiddenFileInput.style.display = 'none';
-        document.body.appendChild(hiddenFileInput);
+    // Input file para subida de foto (usamos el del HTML si existe)
+    let photoInput = document.getElementById('crm-photo-input');
+    if (!photoInput) {
+        photoInput = document.createElement('input');
+        photoInput.type = 'file';
+        photoInput.id = 'crm-photo-input';
+        photoInput.accept = 'image/*';
+        photoInput.classList.add('hidden');
+        document.body.appendChild(photoInput);
     }
 
     // Variable temporal para foto en creación nueva
     window.pendingClientPhoto = null;
 
-    document.getElementById('btn-upload-photo').addEventListener('click', () => {
-        hiddenFileInput.click();
+    document.getElementById('btn-upload-photo')?.addEventListener('click', () => {
+        photoInput.click();
     });
 
-    hiddenFileInput.addEventListener('change', async (e) => {
+    photoInput.addEventListener('change', async (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
-        if (file.size > 5 * 1024 * 1024) { showToast('La imagen excede 5MB', 'error'); hiddenFileInput.value = ''; return; }
+        if (file.size > 5 * 1024 * 1024) { 
+            showToast('La imagen excede 5MB', 'error'); 
+            photoInput.value = ''; 
+            return; 
+        }
 
         // Si no hay cliente guardado aún, guardar foto como preview temporal
         if (!activeModal) {
@@ -2594,7 +2645,7 @@ function initCRM() {
 
         // Flujo para clientes existentes
         await uploadClientPhoto(file, activeModal);
-        hiddenFileInput.value = '';
+        photoInput.value = '';
     });
 
     // Input file oculto para archivos de trabajo
@@ -2640,9 +2691,7 @@ async function uploadClientFile(clientId, file) {
         const { data: urlData } = window.supabaseClient.storage.from('client-photos').getPublicUrl(filePath);
         const fileUrl = urlData?.publicUrl;
         
-        const userId = getUserId();
         const { data, error: dbErr } = await window.supabaseClient.from('client_files').insert([{
-            user_id: userId,
             client_id: clientId,
             url: fileUrl,
             name: file.name,
@@ -2881,11 +2930,15 @@ function renderClientHistory(clientId) {
     
     // 1. Mostrar Deudas Pendientes Específicas
     if (client && client.debt > 0) {
-        const debtTxs = db.transactions.filter(t => t.clientId == clientId && t.isIncome && t.detail && /deuda/i.test(t.detail));
+        const debtTxs = db.transactions.filter(t => t.clientId == clientId && t.isIncome && t.detail && /(deuda|generó|pendiente)/i.test(t.detail));
         let dateInfo = "Fecha de generación desconocida";
+        let detailInfo = "";
         if (debtTxs.length > 0) {
-            const dates = debtTxs.map(t => new Date(t.date).toLocaleDateString('es-UY', { day:'2-digit', month:'2-digit', year:'numeric' }));
+            const sortedDebtTxs = [...debtTxs].sort((a,b) => new Date(a.date) - new Date(b.date));
+            const dates = sortedDebtTxs.map(t => new Date(t.date).toLocaleDateString('es-UY', { day:'2-digit', month:'2-digit', year:'numeric' }));
             dateInfo = `Generada: ${[...new Set(dates)].join(', ')}`;
+            const details = sortedDebtTxs.map(t => t.detail.split('(')[0].replace('🪙 Propina —', '').trim());
+            detailInfo = `<div style="font-size:0.72rem;color:var(--danger);margin-top:2px;">Tratamiento: ${[...new Set(details)].join(', ')}</div>`;
         }
         
         list.innerHTML += `
@@ -2893,6 +2946,7 @@ function renderClientHistory(clientId) {
                 <div>
                     <div style="font-size:0.8rem;font-weight:700;color:var(--danger);">DEUDA PENDIENTE ACTUAL</div>
                     <div style="font-size:0.72rem;color:var(--text-dim);">${dateInfo}</div>
+                    ${detailInfo}
                 </div>
                 <div style="font-weight:800;color:var(--danger);font-size:1rem;">$${fmt(client.debt)}</div>
             </div>
@@ -2939,7 +2993,6 @@ function renderClientHistory(clientId) {
     list.innerHTML += visitsHtml || `<div style="text-align:center; padding:1rem; color:var(--text-dim); font-size:0.8rem;">No hay servicios registrados.</div>`;
     refreshIcons();
 }
-// (orphan code block removed — was a duplicate of renderClientHistory logic left from a previous refactor)
 
 function closeClientModal() {
     document.getElementById('client-modal').classList.remove('open');
@@ -2960,7 +3013,8 @@ async function saveClient() {
         phone: document.getElementById('cm-phone').value,
         instagram: document.getElementById('cm-ig').value,
         birthday: document.getElementById('cm-birthday').value || null,
-        notes: document.getElementById('cm-notes').value
+        notes: document.getElementById('cm-notes').value,
+        user_id: getUserId()
     };
 
     const btn = document.getElementById('btn-save-client');
@@ -3021,7 +3075,7 @@ async function saveClient() {
 
     btn.disabled = false;
 
-    // Obtener el cliente recién guardado (ya está en db)
+    // Obtener el cliente recién guardado o editado
     const savedClient = activeModal
         ? db.clients.find(c => c.id == activeModal)
         : db.clients[db.clients.length - 1];
@@ -3029,7 +3083,7 @@ async function saveClient() {
     closeClientModal();
     if (currentView === 'clients') renderClientsTable();
     if (currentView === 'dashboard') initDashboard();
-    showToast('Ficha guardada');
+    showToast('Ficha guardada exitosamente', 'success');
 
     // Si veníamos desde el autocomplete de agenda, ejecutar callback y reabrir modal de cita
     if (_clientModalSavedCallback && savedClient) {
@@ -3467,9 +3521,7 @@ async function saveService() {
 
     if (!name) return;
 
-    const userId = getUserId();
     const serviceData = {
-        user_id: userId,
         name: name,
         price_type: type,
         price: type === 'fijo' ? price : null,
@@ -3554,38 +3606,79 @@ async function saveEmployee() {
     const name = document.getElementById('emp-name').value.trim();
     if (!name) return;
 
-    const userId = getUserId();
     const empData = {
-        user_id: userId,
         name: name,
         join_date: document.getElementById('emp-join-date').value || null,
         pay_day: parseInt(document.getElementById('emp-pay-day').value) || null,
         tips: parseFloat(document.getElementById('emp-tips').value) || 0,
         advances: parseFloat(document.getElementById('emp-advances').value) || 0,
-        color: document.getElementById('emp-color').value || '#7b52b5'
+        user_id: getUserId()
     };
+    const empColor = document.getElementById('emp-color').value || '#7b52b5';
 
     const submitBtn = document.querySelector('#fm-employee [type="submit"]');
     submitBtn.disabled = true;
 
     if (editingEmployeeId) {
-        const { error } = await window.supabaseClient.from('employees').update(empData).eq('id', editingEmployeeId);
+        // No enviar user_id en updates (es inmutable)
+        const updatePayload = { ...empData };
+        delete updatePayload.user_id;
+        let { error } = await window.supabaseClient.from('employees').update(updatePayload).eq('id', editingEmployeeId);
+        if (error && error.message) {
+            const m = error.message.match(/Could not find the '(\w+)' column/i);
+            if (m && m[1] && m[1] in updatePayload) {
+                delete updatePayload[m[1]];
+                console.warn(`[Employee] Columna '${m[1]}' no existe, reintentando.`);
+                const retry = await window.supabaseClient.from('employees').update(updatePayload).eq('id', editingEmployeeId);
+                error = retry.error;
+            }
+        }
         if (error) {
             showToast('Error al actualizar funcionaria', 'error');
+            console.error('[Employee] Update Error:', error);
             submitBtn.disabled = false;
             return;
         }
         let emp = db.employees.find(x => x.id == editingEmployeeId);
-        if (emp) { emp.name = empData.name; emp.joinDate = empData.join_date; emp.payDay = empData.pay_day; emp.tips = empData.tips; emp.advances = empData.advances; emp.color = empData.color; }
+        if (emp) { 
+            emp.name = empData.name; 
+            emp.joinDate = empData.join_date; 
+            emp.payDay = empData.pay_day; 
+            emp.tips = empData.tips; 
+            emp.advances = empData.advances; 
+            emp.color = empColor; 
+        }
+        localStorage.setItem(`violet_emp_color_${editingEmployeeId}`, empColor);
         showToast('Funcionaria actualizada');
     } else {
-        const { data, error } = await window.supabaseClient.from('employees').insert([empData]).select();
+        let { data, error } = await window.supabaseClient.from('employees').insert([empData]).select();
+        if (error && error.message) {
+            const m = error.message.match(/Could not find the '(\w+)' column/i);
+            if (m && m[1] && m[1] in empData) {
+                delete empData[m[1]];
+                console.warn(`[Employee] Columna '${m[1]}' no existe, reintentando.`);
+                const retry = await window.supabaseClient.from('employees').insert([empData]).select();
+                data = retry.data;
+                error = retry.error;
+            }
+        }
         if (error || !data || !data[0]) {
             showToast('Error al agregar funcionaria', 'error');
+            console.error('[Employee] Insert Error:', error);
             submitBtn.disabled = false;
             return;
         }
-        db.employees.push({ id: data[0].id, name: data[0].name, joinDate: data[0].join_date, payDay: data[0].pay_day, tips: parseFloat(data[0].tips) || 0, advances: parseFloat(data[0].advances) || 0, color: data[0].color || '#7b52b5' });
+        const newEmp = { 
+            id: data[0].id, 
+            name: data[0].name, 
+            joinDate: data[0].join_date, 
+            payDay: data[0].pay_day, 
+            tips: parseFloat(data[0].tips) || 0, 
+            advances: parseFloat(data[0].advances) || 0, 
+            color: empColor 
+        };
+        db.employees.push(newEmp);
+        localStorage.setItem(`violet_emp_color_${data[0].id}`, empColor);
         showToast('Funcionaria agregada');
     }
 
