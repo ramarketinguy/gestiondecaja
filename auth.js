@@ -62,7 +62,7 @@ function watchAuthChanges() {
             }
         } else if (event === 'SIGNED_OUT') {
             resetState();
-            if (!window.location.pathname.includes('login.html')) {
+            if (!window.location.pathname.includes('index.html')) {
                 redirectToLogin();
             }
         }
@@ -254,7 +254,7 @@ function redirectToLogin(reason = '') {
     sessionStorage.setItem('redirect_after_login', window.location.pathname);
     
     if (reason) console.warn(`[AUTH] Redirigiendo a login: ${reason}`);
-    window.location.href = 'login.html';
+    window.location.href = 'index.html';
 }
 
 /**
@@ -265,7 +265,7 @@ function redirectToDashboard() {
     sessionStorage.removeItem('redirect_after_login');
     
     // Si hay una URL guardada y es válida (no es login)
-    if (redirect && !redirect.includes('login.html')) {
+    if (redirect && !redirect.includes('index.html')) {
         window.location.href = redirect;
     } else {
         // Redirigir a pos.html (archivo principal del proyecto)

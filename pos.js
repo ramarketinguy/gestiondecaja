@@ -385,7 +385,7 @@ function initNavigation() {
             if (confirm('¿Cerrar sesión?')) {
                 await window.supabaseClient.auth.signOut();
                 resetState();
-                window.location.href = 'login.html';
+                window.location.href = 'index.html';
             }
         });
     }
