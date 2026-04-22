@@ -98,7 +98,7 @@ Violet usa **Supabase Auth** con múltiples métodos:
 
 #### Método 1: Email + Contraseña
 ```javascript
-// En login.html
+// En index.html
 await loginWithEmail('user@example.com', 'password123');
 ```
 

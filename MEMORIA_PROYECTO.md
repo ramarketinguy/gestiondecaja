@@ -254,7 +254,7 @@ Los !important fuera de media queries son utilities legítima:
 
 ### Problemas corregidos:
 
-1. **Orden de scripts en login.html**
+1. **Orden de scripts en index.html**
    - Faltaban imports necesarios para funciones
    - Corregido: config → state → validation → supabase-helpers → auth
 
@@ -266,7 +266,7 @@ Los !important fuera de media queries son utilities legítima:
    - Se conectó el evento `btn-close-register` en pos.js
    - Ahora funciona correctamente
 
-4. **Funciones redundantes login.html**
+4. **Funciones redundantes index.html**
    - Agregadas funciones `redirectToDashboard` y `resetState`
 
 ### Nota importante - Email de confirmación:
@@ -275,7 +275,7 @@ Los !important fuera de media queries son utilities legítima:
 - Esto hace el flujo más rápido para testing
 
 ### Archivos Modificados:
-- `login.html` - orden scripts, funciones adicionales, UI signup
+- `index.html` - orden scripts, funciones adicionales, UI signup
 - `pos.js` - evento btn-close-register
 
 ---

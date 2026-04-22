@@ -5,7 +5,7 @@
 ## 🔐 Autenticación y Login
 
 ### P: ¿Dónde está la página de login?
-**R:** En `login.html`. Cuando abras http://localhost:3000 deberías ver esta página.
+**R:** En `index.html`. Cuando abras http://localhost:3000 deberías ver esta página.
 
 ### P: ¿Puedo usar Google para login?
 **R:** Sí, pero necesita configuración extra en Supabase:
@@ -22,7 +22,7 @@ Por ahora usa Email + Contraseña, es más simple.
 - `loginWithGoogle()` → Google OAuth
 
 ### P: ¿Cómo reseteo una contraseña?
-**R:** En login.html → "¿Olvidaste tu contraseña?" → Ingresar email → Supabase envía link de reset
+**R:** En index.html → "¿Olvidaste tu contraseña?" → Ingresar email → Supabase envía link de reset
 
 ### P: ¿Puedo agregar WhatsApp login?
 **R:** No directamente en Supabase, pero sí vía terceros (Twilio, etc.). Para MVP, email es suficiente.

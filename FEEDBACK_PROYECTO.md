@@ -165,7 +165,7 @@ function validateTransaction(data) {
 async function checkAuth() {
     const { data: { session } } = await supabaseClient.auth.getSession();
     if (!session) {
-        window.location.href = 'login.html'; // crear página de login
+        window.location.href = 'index.html'; // crear página de login
         return false;
     }
     return true;

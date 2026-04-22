@@ -31,7 +31,7 @@
 - Resumen de clientes (total, deudas, cumpleaños)
 - Sincronización con Supabase
 
-### 5. **login.html** - Página de Login Profesional
+### 5. **index.html** - Página de Login Profesional
 - 3 opciones: Email+Pass, Magic Link, Crear Cuenta
 - Diseño Violet coherente
 - Manejo de errores en UI

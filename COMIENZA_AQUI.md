@@ -8,7 +8,7 @@ Yo creé **8 archivos nuevos** para mejorar tu proyecto:
 - ✅ `auth.js` - Autenticación segura
 - ✅ `validation.js` - Validaciones de datos
 - ✅ `clients.js` - CRUD de clientes
-- ✅ `login.html` - Página de login
+- ✅ `index.html` - Página de login
 - ✅ `README.md` - Documentación completa
 - ✅ `SETUP_SUPABASE.md` - Guía Supabase
 - ✅ `ACCION_INMEDIATA.md` - Tu roadmap

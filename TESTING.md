@@ -40,7 +40,7 @@
 
 ## Archivo principal:
 - `pos.html` - Interfaz principal
-- `login.html` - Pantalla de inicio de sesión
+- `index.html` - Pantalla de inicio de sesión
 
 ## Estructura modular:
 El JavaScript está dividido en módulos para mejor mantenimiento:
