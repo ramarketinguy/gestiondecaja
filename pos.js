@@ -47,7 +47,15 @@ window.db = window.db || {
 };
 
 // Función de inicialización simple que llama a todas las demás
+let _violetInitDone = false;
 function violetInit() {
+    if (_violetInitDone) {
+        // Segunda llamada (datos llegaron tarde): solo re-renderizar vistas
+        if (typeof initDashboard === 'function') initDashboard();
+        if (typeof updateStats === 'function') updateStats();
+        return;
+    }
+    _violetInitDone = true;
     console.log('[VIOLET] violetInit() ejecutado');
 
     try {
