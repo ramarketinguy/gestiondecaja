@@ -20,7 +20,7 @@
     <!-- Supabase -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     
-    <link rel="stylesheet" href="pos.css?v=202604222130">
+    <link rel="stylesheet" href="pos.css?v=202604260900">
 </head>
 <body>
 
@@ -1185,16 +1185,16 @@
     </div>
 
     <!-- Scripts del Sistema -->
-    <script src="config.js?v=202604222130"></script>
-    <script src="state.js?v=202604222130"></script>
-    <script src="validation.js?v=202604222130"></script>
-    <script src="auth.js?v=202604222130"></script>
-    <script src="supabase-helpers.js?v=202604222130"></script>
-    <script src="clients.js?v=202604222130"></script>
-    <script src="pos.js?v=202604222130"></script>
-    <script src="pos.dashboard.js?v=202604222130"></script>
-    <script src="pos.services.js?v=202604222130"></script>
-    <script src="pos.config.js?v=202604222130"></script>
+    <script src="config.js?v=202604260900"></script>
+    <script src="state.js?v=202604260900"></script>
+    <script src="validation.js?v=202604260900"></script>
+    <script src="auth.js?v=202604260900"></script>
+    <script src="supabase-helpers.js?v=202604260900"></script>
+    <script src="clients.js?v=202604260900"></script>
+    <script src="pos.js?v=202604260900"></script>
+    <script src="pos.dashboard.js?v=202604260900"></script>
+    <script src="pos.services.js?v=202604260900"></script>
+    <script src="pos.config.js?v=202604260900"></script>
     <!-- Modal: Cierre de Caja (Formulario) -->
     <div class="modal-overlay" id="modal-closure">
         <div class="modal" style="max-width: 480px;">
@@ -1203,10 +1203,10 @@
                 <button class="modal-close-btn" onclick="document.getElementById('modal-closure').classList.remove('open')"><i data-lucide="x"></i></button>
             </div>
             <div class="modal-body">
-                <div style="background:rgba(91,58,138,0.1); border-radius:12px; padding:20px; text-align:center; margin-bottom:20px; border: 1px solid var(--border);">
-                    <div style="font-size:0.85rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:1px; margin-bottom:8px;">Total del Día</div>
-                    <div style="font-size:2.2rem; font-weight:800; color:var(--success);" id="closure-total-display">$0</div>
-                    <div style="font-size:0.8rem; color:var(--text-dim); margin-top:4px;" id="closure-date-display">21 de Abril, 2024</div>
+                <div style="background: linear-gradient(135deg, rgba(91,58,138,0.25), rgba(201,168,76,0.15)); border-radius:16px; padding:24px; text-align:center; margin-bottom:20px; border: 1px solid rgba(155,114,212,0.3); box-shadow: 0 12px 40px rgba(0,0,0,0.3);">
+                    <div style="font-size:0.75rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:1.5px; margin-bottom:8px; font-weight:600;">Balance Total del Día</div>
+                    <div style="font-size:2.8rem; font-weight:900; color:var(--success); text-shadow: 0 0 25px rgba(74,222,128,0.35);" id="closure-total-display">$0</div>
+                    <div style="font-size:0.85rem; color:var(--text-dim); margin-top:6px; opacity:0.8; font-weight:500;" id="closure-date-display">-- de --, 2024</div>
                 </div>
 
                 <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-bottom:20px;">
@@ -1220,9 +1220,9 @@
                     </div>
                 </div>
 
-                <div class="form-group">
-                    <label>Observaciones / Novedades</label>
-                    <textarea id="closure-note" placeholder="Escribe aquí si hubo algún descuadre o novedad importante..." style="min-height:80px;"></textarea>
+                <div class="form-group" style="margin-top:1.5rem;">
+                    <label style="font-size:0.8rem; color:var(--text-dim); text-transform:uppercase; margin-bottom:8px; display:block;">Observaciones / Novedades</label>
+                    <textarea id="closure-note" class="textarea-custom" placeholder="Detalla aquí si hubo algún descuadre o novedad..." style="min-height:100px; background:rgba(0,0,0,0.2); border-color:var(--border-subtle);"></textarea>
                 </div>
             </div>
             <div class="modal-footer" style="flex-direction:column; gap:10px;">

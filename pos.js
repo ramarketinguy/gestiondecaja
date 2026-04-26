@@ -74,6 +74,8 @@ function violetInit() {
         if (typeof initCRM === 'function') initCRM();
         if (typeof initAnalytics === 'function') initAnalytics();
         if (typeof initSettings === 'function') initSettings();
+        if (typeof initAIChat === 'function') initAIChat();
+        if (typeof checkBirthdayAlert === 'function') checkBirthdayAlert();
 
         // 5. Iconos Lucide
         if (typeof lucide !== 'undefined' && lucide.createIcons) {
@@ -141,12 +143,14 @@ window.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // Forzar inicio después de 2 segundos como máximo
-    setTimeout(() => violetInit(), 2000);
+    // Forzar inicio después de 2 segundos como máximo (fallback si Supabase tarda)
+    const _fallbackTimer = setTimeout(() => violetInit(), 2000);
 
-    // También intentar si Supabase está listo
+    // También intentar si Supabase está listo - cancela el fallback para no llamar violetInit() dos veces
     if (window.supabaseClient) {
-        loadDataFromSupabase().then(() => violetInit()).catch(() => violetInit());
+        loadDataFromSupabase()
+            .then(() => { clearTimeout(_fallbackTimer); violetInit(); })
+            .catch(() => { clearTimeout(_fallbackTimer); violetInit(); });
     }
 });
 
@@ -302,59 +306,6 @@ function refreshIcons() {
 }
 
 // ==========================================
-// HELPERS DE CLIENTES (robustez ante esquemas Supabase incompletos)
-// ==========================================
-// Inserta cliente; si Supabase no tiene columnas "instagram" u otras opcionales,
-// reintenta sin esos campos para evitar "Could not find column ... in schema cache".
-async function insertClientSafe(payload) {
-    // user_id no existe en tabla clients
-    let { data, error } = await window.supabaseClient.from('clients').insert([payload]).select();
-    if (error && error.message) {
-        // Detecta "Could not find the 'X' column of 'clients'"
-        const m = error.message.match(/Could not find the '(\w+)' column/i);
-        if (m && m[1] && m[1] in payload) {
-            const cleaned = { ...payload };
-            delete cleaned[m[1]];
-            console.warn(`Columna '${m[1]}' no existe en Supabase. Insertando sin ese campo.`);
-            const retry = await window.supabaseClient.from('clients').insert([cleaned]).select();
-            return retry;
-        }
-    }
-    return { data, error };
-}
-
-// Actualiza cliente con el mismo fallback
-async function updateClientSafe(id, payload) {
-    let { error } = await window.supabaseClient.from('clients').update(payload).eq('id', id);
-    if (error && error.message) {
-        const m = error.message.match(/Could not find the '(\w+)' column/i);
-        if (m && m[1] && m[1] in payload) {
-            const cleaned = { ...payload };
-            delete cleaned[m[1]];
-            console.warn(`Columna '${m[1]}' no existe. Actualizando sin ese campo.`);
-            const retry = await window.supabaseClient.from('clients').update(cleaned).eq('id', id);
-            return retry;
-        }
-    }
-    return { error };
-}
-
-// Detecta duplicados por nombre normalizado o teléfono (último 8 dígitos)
-function findDuplicateClient(name, phone = '', excludeId = null) {
-    const normName = (name || '').trim().toLowerCase().replace(/\s+/g, ' ');
-    const normPhone = (phone || '').replace(/\D/g, '').slice(-8);
-    if (!normName && !normPhone) return null;
-    return db.clients.find(c => {
-        if (excludeId && c.id == excludeId) return false;
-        const cName = (c.name || '').trim().toLowerCase().replace(/\s+/g, ' ');
-        const cPhone = (c.phone || '').replace(/\D/g, '').slice(-8);
-        if (normPhone && cPhone && cPhone === normPhone) return true;
-        if (cName && cName === normName) return true;
-        return false;
-    }) || null;
-}
-
-// ==========================================
 // CONFIGURACIÓN DEL NEGOCIO (horarios, días cerrados, formato de hora)
 // ==========================================
 function getBusinessConfig() {
@@ -436,7 +387,8 @@ function initNavigation() {
         if (botLink)  botLink.classList.add('active');
 
         document.querySelectorAll('.view-section').forEach(view => view.classList.remove('active'));
-        document.getElementById(`view-${viewId}`).classList.add('active');
+        const targetView = document.getElementById(`view-${viewId}`);
+        if (targetView) targetView.classList.add('active');
 
         currentView = viewId;
         updateHeaderTitles(viewId);
@@ -491,7 +443,11 @@ function updateHeaderTitles(viewId) {
     }
 }
 
+let _mobileMenuInitialized = false;
 function initMobileMenu() {
+    if (_mobileMenuInitialized) return;
+    _mobileMenuInitialized = true;
+
     const btn = document.getElementById('mobile-menu-btn');
     const sidebar = document.getElementById('sidebar');
     const overlay = document.getElementById('sidebar-overlay');
@@ -619,14 +575,6 @@ function initCustomSelects() {
 // ==========================================
 // 5. PENDIENTES (Dashboard Diario)
 // ==========================================
-function initDashboard() {
-    console.log('[POS] initDashboard llamado');
-    renderDashboardCumpleanos();
-    renderDashboardTareas();
-    renderDashboardDeudas();
-    renderDashboardAgendaResumen();
-}
-
 function renderDashboardCumpleanos() {
     const list = document.getElementById('widget-birthdays');
     if (!list) return;
@@ -1363,13 +1311,16 @@ function renderAgendaSidePanel(dateStr) {
                     let borderColor = 'rgba(52,211,153,0.3)';
                     let textColor = 'var(--success)';
 
-                    // Si hay alguien ocupado pero aún hay lugar, teñir con su color
-                    if (totalBusyCount > 0 && activeEmps.length > 0 && busyEmpIds.length > 0) {
-                        const busyEmp = activeEmps.find(e => e.id == busyEmpIds[0]);
-                        if (busyEmp && busyEmp.color) {
-                            textColor = busyEmp.color;
-                            bgColor = busyEmp.color + '20'; // ~12% opacity
-                            borderColor = busyEmp.color + '50'; // ~31% opacity
+                    // Si hay alguien ocupado pero aún hay lugar, teñir con el color de un disponible
+                    if (totalBusyCount > 0 && activeEmps.length > 0) {
+                        const availableEmps = activeEmps.filter(e => !busyEmpIds.includes(e.id));
+                        if (availableEmps.length > 0) {
+                            const availEmp = availableEmps[0];
+                            if (availEmp && availEmp.color) {
+                                textColor = availEmp.color;
+                                bgColor = availEmp.color + '20'; // ~12% opacity
+                                borderColor = availEmp.color + '50'; // ~31% opacity
+                            }
                         }
                     }
 
@@ -1554,7 +1505,11 @@ function openServiceDurationModal(srv) {
     close.addEventListener('click', onCancel);
 }
 
+let _posInitialized = false;
 function initPOS() {
+    if (_posInitialized) return;
+    _posInitialized = true;
+
     const toggle = document.getElementById('transaction-type-toggle');
     const incomeFields = document.getElementById('income-fields');
     const expenseFields = document.getElementById('expense-fields');
@@ -1685,7 +1640,7 @@ function initPOS() {
         if (modal) modal.classList.remove('open');
     });
 
-    const btnCierreGuardar = document.getElementById('btn-closure-save') || document.getElementById('btn-cierre-cerrar');
+    const btnCierreGuardar = document.getElementById('btn-closure-save') || document.getElementById('btn-confirm-closure') || document.getElementById('btn-cierre-cerrar');
     if (btnCierreGuardar) btnCierreGuardar.addEventListener('click', saveCashClosure);
 
     const btnCierreWp = document.getElementById('btn-closure-whatsapp') || document.getElementById('btn-cierre-whatsapp');
@@ -1813,7 +1768,11 @@ function initPOSClientAutocomplete() {
 // ==========================================
 let _quickClientCallback = null;
 
+let _quickModalsInitialized = false;
 function initQuickModals() {
+    if (_quickModalsInitialized) return;
+    _quickModalsInitialized = true;
+
     // Quick Client Modal
     const qcModal  = document.getElementById('modal-quick-client');
     const qcClose  = document.getElementById('qc-close');
@@ -2094,7 +2053,12 @@ async function saveTransaction() {
         }
 
         if (isIncome) {
+           const savedClientId = transactionSchema.client_id;
            clearClientSelection();
+           // Si la ficha de esta clienta estaba abierta, actualizar el historial inmediatamente
+           if (activeModal && activeModal == savedClientId) {
+               renderClientHistory(activeModal);
+           }
            document.getElementById('amount').value = '';
            document.getElementById('full-service-price').value = '';
            document.getElementById('service').value = '';
@@ -2491,8 +2455,9 @@ async function saveCashClosure() {
         total_amount: cache.ef + cache.digital,
         income_amount: cache.ef + cache.digital + cache.egresos,
         egress_amount: cache.egresos,
-        note: `Señas: ${cache.se}`,
-        created_by: 'Patricia'
+        note: (document.getElementById('closure-note')?.value || "") + ` | Señas: ${cache.se}`,
+        created_by: 'Patricia',
+        user_id: getUserId()
     };
 
     showToast('Guardando cierre...', 'info');
@@ -2502,11 +2467,12 @@ async function saveCashClosure() {
         if (!error && data) {
             db.closures.unshift(data[0]);
             renderClosuresHistory();
-            document.getElementById('modal-cierre-caja').classList.remove('open');
-            showToast('Cierre de caja guardado con éxito.');
+            const m = document.getElementById('modal-closure') || document.getElementById('modal-cierre-caja');
+            if (m) m.classList.remove('open');
+            showToast('Cierre de caja guardado con éxito.', 'success');
         } else {
-            console.error(error);
-            showToast('Error al guardar cierre. Ver consola.', 'error');
+            console.error('[Cierre] Error Supabase:', error);
+            showToast('Error al guardar cierre: ' + (error?.message || 'ver consola'), 'error');
         }
     } catch(e) {
         console.error(e);
@@ -2557,10 +2523,10 @@ function openClosureDetailModal(closureId) {
     const timeStr = date.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
 
     document.getElementById('closure-detail-body').innerHTML = `
-        <div style="background:rgba(91,58,138,0.1); border-radius:10px; padding:15px; text-align:center; margin-bottom:1.5rem;">
-            <div style="font-size:0.75rem; color:var(--text-dim); text-transform:uppercase; margin-bottom:5px;">Recaudación Total</div>
-            <div style="font-size:1.8rem; font-weight:800; color:var(--success);">$${fmt(c.total_amount)}</div>
-            <div style="font-size:0.8rem; color:var(--text-dim);">${dateStr} · ${timeStr}</div>
+        <div style="background: linear-gradient(135deg, rgba(91,58,138,0.2), rgba(201,168,76,0.1)); border-radius:16px; padding:24px; text-align:center; margin-bottom:20px; border: 1px solid rgba(155,114,212,0.25); box-shadow: 0 8px 32px rgba(0,0,0,0.2);">
+            <div style="font-size:0.75rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:1.5px; margin-bottom:8px; font-weight:600;">Balance del Día</div>
+            <div style="font-size:2.8rem; font-weight:900; color:var(--success); text-shadow: 0 0 20px rgba(74,222,128,0.3);">$${fmt(c.total_amount)}</div>
+            <div style="font-size:0.85rem; color:var(--text-dim); margin-top:6px; opacity:0.8;">${dateStr} · ${timeStr}</div>
         </div>
 
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:1.5rem;">
@@ -2639,7 +2605,7 @@ function initCRM() {
                 showToast('Foto seleccionada. Se guardará al crear la clienta.', 'info');
             };
             reader.readAsDataURL(file);
-            hiddenFileInput.value = '';
+            photoInput.value = '';
             return;
         }
 
@@ -2772,7 +2738,8 @@ async function createClient(name, phone = '') {
         birthday: null,
         notes: '',
         balance: 0,
-        debt: 0
+        debt: 0,
+        user_id: getUserId()
     };
     const { data, error } = await insertClientSafe(newClientData);
     if (data && data[0]) {
@@ -2863,15 +2830,18 @@ function openClientModal(clientId = null) {
                 initialsEl.classList.remove('hidden');
             }
 
-            if (c.balance > 0 || c.debt > 0) {
+            const balanceVal = parseFloat(c.balance) || 0;
+            const debtVal = parseFloat(c.debt) || 0;
+
+            if (balanceVal > 0 || debtVal > 0) {
                 bBadge.classList.remove('hidden');
-                if (c.balance > 0) {
-                    bBadge.textContent = `Saldo a favor (Seña): $${fmt(c.balance)}`;
+                if (balanceVal > 0) {
+                    bBadge.textContent = `Saldo a favor (Seña): $${fmt(balanceVal)}`;
                     bBadge.style.color = 'var(--info)';
                     bBadge.style.borderColor = 'var(--info)';
                 } else {
                     const debtTxs = db.transactions.filter(t => t.clientId == c.id && t.detail && /deuda/i.test(t.detail));
-                    let debtInfo = `Deuda pendiente: $${fmt(c.debt)}`;
+                    let debtInfo = `Deuda pendiente: $${fmt(debtVal)}`;
                     if (debtTxs.length > 0) {
                         const debtDates = debtTxs.map(t => {
                             const d = new Date(t.date);
@@ -2899,6 +2869,7 @@ function openClientModal(clientId = null) {
         photoEl.src = '';
         photoEl.classList.add('hidden');
         document.getElementById('cm-history-section').classList.add('hidden');
+        document.getElementById('cm-files-section').classList.add('hidden');
     }
     refreshIcons();
 }
@@ -2929,7 +2900,7 @@ function renderClientHistory(clientId) {
     const client = db.clients.find(c => c.id == clientId);
     
     // 1. Mostrar Deudas Pendientes Específicas
-    if (client && client.debt > 0) {
+    if (client && parseFloat(client.debt) > 0) {
         const debtTxs = db.transactions.filter(t => t.clientId == clientId && t.isIncome && t.detail && /(deuda|generó|pendiente)/i.test(t.detail));
         let dateInfo = "Fecha de generación desconocida";
         let detailInfo = "";
@@ -2948,7 +2919,7 @@ function renderClientHistory(clientId) {
                     <div style="font-size:0.72rem;color:var(--text-dim);">${dateInfo}</div>
                     ${detailInfo}
                 </div>
-                <div style="font-weight:800;color:var(--danger);font-size:1rem;">$${fmt(client.debt)}</div>
+                <div style="font-weight:800;color:var(--danger);font-size:1rem;">$${fmt(parseFloat(client.debt))}</div>
             </div>
         `;
     }
@@ -2956,7 +2927,7 @@ function renderClientHistory(clientId) {
     // 2. Historial de Servicios
     const grouped = {};
     db.transactions
-        .filter(t => t.clientId == clientId && t.isIncome && !t.detail.includes('Propina'))
+        .filter(t => t.clientId == clientId && t.isIncome && !(t.detail || '').includes('Propina'))
         .sort((a, b) => new Date(b.date) - new Date(a.date))
         .forEach(t => {
             const d = t.date.split('T')[0];
@@ -3261,8 +3232,10 @@ function renderServicesRanking() {
     // Contar servicios
     const srvCount = {};
     db.transactions.filter(t => t.isIncome && t.detail).forEach(t => {
-        // detail sometimes contains ' (Pago parcial...', extract real service name
-        let name = t.detail.split(' (')[0];
+        // Strip emojis, propina prefixes and parenthetical notes
+        let name = t.detail.split(' (')[0].split(' — ')[0].replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim();
+        if (name.toLowerCase().includes('propina')) return; // Ignore tips in ranking
+        if (!name) name = 'Servicio General';
         srvCount[name] = (srvCount[name] || 0) + 1;
     });
 
@@ -3800,11 +3773,10 @@ function checkBirthdayAlert() {
 // 13. CIERRE DE CAJA
 // ==========================================
 function isSameDay(d1, d2) {
-    const date1 = new Date(d1);
-    const date2 = new Date(d2);
-    return date1.getFullYear() === date2.getFullYear() &&
-           date1.getMonth() === date2.getMonth() &&
-           date1.getDate() === date2.getDate();
+    if (!d1 || !d2) return false;
+    const date1 = new Date(d1).toISOString().slice(0, 10);
+    const date2 = new Date(d2).toISOString().slice(0, 10);
+    return date1 === date2;
 }
 
 function openCierreCaja() {
@@ -3875,7 +3847,7 @@ function exportDailyTransactionsCSV() {
     const headers = ['Fecha', 'Descripcion', 'Metodo', 'Monto'];
     const rows = todayTrans.map(t => [
         `"${t.date}"`,
-        `"${(t.description || '').replace(/"/g, '')}"`,
+        `"${(t.detail || '').replace(/"/g, '')}"`,
         `"${t.method}"`,
         `"${t.amount}"`
     ]);

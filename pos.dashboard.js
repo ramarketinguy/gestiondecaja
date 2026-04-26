@@ -174,15 +174,4 @@ function renderDashboardAgendaResumen() {
     });
 }
 
-function checkBirthdayAlert() {
-    const clients = db?.clients || [];
-    const today = new Date();
-    const hasToday = clients.some(c => {
-        if (!c.birthday) return false;
-        const b = c.birthday.split('-');
-        return parseInt(b[1]) === today.getMonth() + 1 && parseInt(b[2]) === today.getDate();
-    });
-    if (hasToday) showToast('¡Hoy es cumpleaños de una clienta! 🎂', 'info');
-}
-
 console.log('[DASHBOARD] Módulo cargado');
