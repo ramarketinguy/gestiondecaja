@@ -133,7 +133,17 @@ window.navigateTo = function(viewId) {
 };
 
 // también agregar click listeners directamente
-window.addEventListener('DOMContentLoaded', () => {
+window.addEventListener('DOMContentLoaded', async () => {
+    // 1. VERIFICACIÓN DE AUTENTICACIÓN
+    if (typeof initializeAuth === 'function') {
+        const isAuth = await initializeAuth();
+        if (!isAuth) {
+            window.location.href = 'index.html';
+            return; // Detiene la carga si no está logueado
+        }
+        watchAuthChanges(); // Para escuchar si la sesión caduca
+    }
+
     // Agregar navegación manual a cada enlace
     document.querySelectorAll('.nav-link[data-view]').forEach(link => {
         link.addEventListener('click', (e) => {
