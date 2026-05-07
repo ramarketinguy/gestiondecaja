@@ -188,7 +188,7 @@ async function signup(email, password, fullName = '') {
                 data: {
                     full_name: fullName
                 },
-                emailRedirectTo: window.location.origin
+                emailRedirectTo: (typeof SITE_URL !== 'undefined' ? SITE_URL : window.location.origin)
             }
         });
 
@@ -312,8 +312,9 @@ async function resetPassword(email) {
     try {
         setState('ui.isLoading', true);
 
+        const siteBase = (typeof SITE_URL !== 'undefined' ? SITE_URL : window.location.origin);
         const { error } = await window.supabaseClient.auth.resetPasswordForEmail(email, {
-            redirectTo: `${window.location.origin}/reset-password.html`
+            redirectTo: `${siteBase}/index.html`
         });
 
         if (error) {
