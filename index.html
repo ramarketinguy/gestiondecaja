@@ -424,11 +424,13 @@ document.getElementById('signupForm').addEventListener('submit', async (e) => {
 
     try {
         // Crear usuario directamente usando Supabase Auth
+        const siteBase = (typeof SITE_URL !== 'undefined' ? SITE_URL : window.location.origin);
         const { data, error } = await window.supabaseClient.auth.signUp({
             email,
             password,
             options: {
-                data: { full_name: name }
+                data: { full_name: name },
+                emailRedirectTo: siteBase
             }
         });
 
