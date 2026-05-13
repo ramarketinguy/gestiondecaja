@@ -47,6 +47,10 @@
                 <i data-lucide="contact"></i>
                 <span>Directorio Clientes</span>
             </a>
+            <a href="#" class="nav-link" data-view="staff" id="nav-staff">
+                <i data-lucide="users"></i>
+                <span>Staff</span>
+            </a>
             <a href="#" class="nav-link" data-view="analytics" id="nav-analytics">
                 <i data-lucide="bar-chart-3"></i>
                 <span>Analíticas</span>
@@ -92,6 +96,10 @@
         <a href="#" class="bottom-nav-item" data-view="clients">
             <i data-lucide="contact"></i>
             <span>Clientes</span>
+        </a>
+        <a href="#" class="bottom-nav-item" data-view="staff">
+            <i data-lucide="users"></i>
+            <span>Staff</span>
         </a>
         <a href="#" class="bottom-nav-item" data-view="analytics">
             <i data-lucide="bar-chart-3"></i>
@@ -622,6 +630,47 @@
         </section>
 
         <!-- ═══════════ VIEW: CONFIGURACIÓN ═══════════ -->
+        <section class="view-section" id="view-staff">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Funcionarias</div>
+                    <div class="stat-value" id="staff-total-count">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Propinas Acumuladas</div>
+                    <div class="stat-value" id="staff-total-tips">$0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Adelantos</div>
+                    <div class="stat-value" id="staff-total-advances">$0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Bloqueos Activos</div>
+                    <div class="stat-value" id="staff-total-blocks">0</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
+                    <h2 class="card-title"><i data-lucide="users"></i> Panel de Staff</h2>
+                    <button class="btn btn-primary btn-sm" onclick="openEmployeeModal()"><i data-lucide="plus"></i> Nuevo Staff</button>
+                </div>
+                <div class="card-body" style="padding:1.5rem;">
+                    <ul class="task-list" id="staff-employees-list"></ul>
+                </div>
+            </div>
+
+            <div class="card" style="margin-top:1.5rem;">
+                <div class="card-header">
+                    <h2 class="card-title"><i data-lucide="calendar-x"></i> Horarios Bloqueados</h2>
+                </div>
+                <div class="card-body" style="padding:1.5rem;">
+                    <p style="font-size:0.85rem;color:var(--text-dim);margin-top:0;">Los bloqueos se gestionan desde Configuración de Agenda y afectan la disponibilidad al agendar citas.</p>
+                    <ul id="staff-blocked-list" class="task-list"></ul>
+                </div>
+            </div>
+        </section>
+
         <section class="view-section" id="view-settings">
             <div class="dashboard-grid">
 
@@ -828,7 +877,8 @@
                             <label>Hora</label>
                             <div class="input-wrap">
                                 <i data-lucide="clock"></i>
-                                <select id="apt-time" class="custom-select time-select" required></select>
+                                <input type="time" id="apt-time" list="apt-time-options" step="900" required>
+                                <datalist id="apt-time-options"></datalist>
                             </div>
                         </div>
                     </div>

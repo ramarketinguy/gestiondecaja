@@ -38,6 +38,13 @@ if (typeof showToast !== 'function') {
     };
 }
 
+function withCurrentUser(payload) {
+    const userId = typeof getUserId === 'function' ? getUserId() : null;
+    if (userId) payload.user_id = userId;
+    else delete payload.user_id;
+    return payload;
+}
+
 // ==========================================
 // 0. INICIALIZACIÓN DE EMERGENCIA - VERSIÓN SIMPLIFICADA
 // ==========================================
@@ -82,6 +89,7 @@ function violetInit() {
         if (typeof initCRM === 'function') initCRM();
         if (typeof initAnalytics === 'function') initAnalytics();
         if (typeof initSettings === 'function') initSettings();
+        if (typeof renderStaffPanel === 'function') renderStaffPanel();
         if (typeof initAIChat === 'function') initAIChat();
         if (typeof checkBirthdayAlert === 'function') checkBirthdayAlert();
 
@@ -130,6 +138,7 @@ window.navigateTo = function(viewId) {
     // Actualizar header
     window.currentView = viewId;
     if (typeof updateHeaderTitles === 'function') updateHeaderTitles(viewId);
+    if (viewId === 'staff' && typeof renderStaffPanel === 'function') renderStaffPanel();
 };
 
 // también agregar click listeners directamente
@@ -493,6 +502,7 @@ function initNavigation() {
         if (viewId === 'dashboard') initDashboard();
         else if (viewId === 'caja') { updateStats(); renderTransactionsTable(); }
         else if (viewId === 'clients') renderClientsTable();
+        else if (viewId === 'staff') renderStaffPanel();
         else if (viewId === 'analytics') updateCharts();
     }
 
@@ -531,6 +541,7 @@ function updateHeaderTitles(viewId) {
         'agenda': { t: 'Agenda de Citas', s: 'Gestiona los turnos programados del salón.' },
         'caja': { t: 'Caja y Finanzas', s: 'Registra y controla los movimientos del día.' },
         'clients': { t: 'Directorio de Clientas', s: 'Base de datos y perfiles individuales.' },
+        'staff': { t: 'Panel de Staff', s: 'Gestiona funcionarias, propinas, adelantos y bloqueos.' },
         'analytics': { t: 'Analíticas del Negocio', s: 'Métricas clave de rendimiento.' },
         'settings': { t: 'Configuración', s: 'Ajustes del sistema y usuarios.' }
     };
@@ -606,6 +617,20 @@ function populateTimeSelects() {
             select.value = currentVal;
         }
     });
+
+    const aptTimeOptions = document.getElementById('apt-time-options');
+    if (aptTimeOptions) {
+        aptTimeOptions.innerHTML = '';
+        for (let h = 0; h < 24; h++) {
+            for (let m = 0; m < 60; m += 15) {
+                const hh = h.toString().padStart(2, '0');
+                const mm = m.toString().padStart(2, '0');
+                const option = document.createElement('option');
+                option.value = `${hh}:${mm}`;
+                aptTimeOptions.appendChild(option);
+            }
+        }
+    }
 }
 function initCustomSelects() {
     const selects = document.querySelectorAll('.custom-select');
@@ -991,16 +1016,15 @@ async function saveAppointment() {
         if (!aptCurrentClient) return;
     }
 
-    const aptData = {
+    const aptData = withCurrentUser({
         client_id: aptCurrentClient.id,
         client_name: aptCurrentClient.name,
         apt_date: dateInput,
         apt_time: timeInput,
         service: serviceVal,
         notes: document.getElementById('apt-notes').value,
-        employee_id: aptEmployeeId,
-        user_id: getUserId()
-    };
+        employee_id: aptEmployeeId
+    });
     const repeatDates = getAppointmentRepeatDates(dateInput);
 
     showToast('Guardando cita...', 'info');
@@ -1760,10 +1784,26 @@ function initQuickModals() {
         qcSave.disabled = false;
         if (error || !data?.[0]) {
             console.error(error);
-            showToast('Error al crear clienta: ' + (error?.message || 'verificá conexión'), 'error');
+            const fallbackClient = {
+                id: createLocalId('client'),
+                name,
+                phone,
+                instagram: ig,
+                balance: 0,
+                debt: 0,
+                notes: '',
+                birthday: null,
+                pendingSync: true
+            };
+            db.clients.push(fallbackClient);
+            persistCollectionLocal('clients', db.clients);
+            showToast(`Clienta "${name}" guardada localmente`, 'warning');
+            closeQC();
+            if (_quickClientCallback) _quickClientCallback(fallbackClient);
             return;
         }
         db.clients.push(data[0]);
+        persistCollectionLocal('clients', db.clients);
         showToast(`Clienta "${name}" creada`);
         closeQC();
         if (_quickClientCallback) _quickClientCallback(data[0]);
@@ -1792,13 +1832,31 @@ function initQuickModals() {
         const priceVal = parseFloat(document.getElementById('qs-price').value);
         const hasPrice = !isNaN(priceVal) && priceVal > 0;
         qsSave.disabled = true;
-        const { data, error } = await window.supabaseClient.from('services').insert([{
+        const quickServiceData = withCurrentUser({
             name, price_type: hasPrice ? 'fijo' : 'variable', price: hasPrice ? priceVal : null
-        }]).select();
+        });
+        const { data, error } = await window.supabaseClient.from('services').insert([quickServiceData]).select();
         qsSave.disabled = false;
-        if (error || !data?.[0]) { showToast('Error al crear servicio', 'error'); return; }
+        if (error || !data?.[0]) {
+            console.error('[QuickService] Insert Error:', error);
+            const fallbackService = {
+                id: createLocalId('srv'),
+                name,
+                priceType: quickServiceData.price_type,
+                price: quickServiceData.price,
+                duration: null,
+                pendingSync: true
+            };
+            db.services.push(fallbackService);
+            persistCollectionLocal('services', db.services);
+            showToast(`Servicio "${name}" guardado localmente`, 'warning');
+            closeQS();
+            updateFormSelects();
+            return;
+        }
         const newSrv = data[0];
         db.services.push({ id: newSrv.id, name: newSrv.name, priceType: newSrv.price_type, price: parseFloat(newSrv.price) || null, duration: newSrv.duration ? parseInt(newSrv.duration) : null });
+        persistCollectionLocal('services', db.services);
         showToast(`Servicio "${name}" creada`);
         closeQS();
         updateFormSelects(); // reconstruye custom selects con el nuevo servicio
@@ -2425,7 +2483,7 @@ async function saveCashClosure() {
         }
     });
 
-    const closureData = {
+    const closureData = withCurrentUser({
         closure_date: new Date().toISOString(),
         cash_amount: cache.ef,
         digital_amount: cache.digital,
@@ -2433,9 +2491,8 @@ async function saveCashClosure() {
         income_amount: cache.ef + cache.digital + cache.egresos,
         egress_amount: cache.egresos,
         note: (document.getElementById('closure-note')?.value || "") + ` | Señas: ${cache.se}`,
-        created_by: 'Patricia',
-        user_id: getUserId()
-    };
+        created_by: 'Patricia'
+    });
 
     showToast('Guardando cierre...', 'info');
     try {
@@ -2729,16 +2786,15 @@ async function createClient(name, phone = '') {
         return existing;
     }
 
-    const newClientData = {
+    const newClientData = withCurrentUser({
         name: name,
         phone: phone || '',
         instagram: '',
         birthday: null,
         notes: '',
         balance: 0,
-        debt: 0,
-        user_id: getUserId()
-    };
+        debt: 0
+    });
     const { data, error } = await insertClientSafe(newClientData);
     if (data && data[0]) {
         db.clients.push(data[0]);
@@ -2979,14 +3035,13 @@ async function saveClient() {
         return showToast('Completá el nombre de la clienta (primer campo)', 'error');
     }
 
-    const clientData = {
+    const clientData = withCurrentUser({
         name,
         phone: document.getElementById('cm-phone').value,
         instagram: document.getElementById('cm-ig').value,
         birthday: document.getElementById('cm-birthday').value || null,
-        notes: document.getElementById('cm-notes').value,
-        user_id: getUserId()
-    };
+        notes: document.getElementById('cm-notes').value
+    });
 
     const btn = document.getElementById('btn-save-client');
 
@@ -3010,10 +3065,19 @@ async function saveClient() {
         const prev = db.clients.find(c => c.id == activeModal);
         const { error } = await updateClientSafe(activeModal, clientData);
         if (error) {
-            console.error(error);
-            showToast('Error al guardar perfil: ' + (error.message || ''), 'error');
-            btn.disabled = false;
-            return;
+            console.error('[Client] Update Error:', error);
+            const localClient = db.clients.find(c => c.id == activeModal);
+            if (!localClient) {
+                showToast('Error al guardar perfil: ' + (error.message || ''), 'error');
+                btn.disabled = false;
+                return;
+            }
+            Object.assign(localClient, clientData, { pendingSync: true });
+            persistCollectionLocal('clients', db.clients);
+            showToast('Perfil guardado localmente. Revisar sincronización con Supabase.', 'warning');
+        } else {
+            Object.assign(db.clients.find(c => c.id == activeModal), clientData);
+            persistCollectionLocal('clients', db.clients);
         }
         // Log de cambios
         const changes = [];
@@ -3022,7 +3086,6 @@ async function saveClient() {
         if ((prev.notes||'') !== clientData.notes) changes.push(`Notas actualizadas`);
         if ((prev.birthday||'') !== (clientData.birthday||'')) changes.push(`Cumpleaños actualizado`);
         if (changes.length > 0) addClientLog(activeModal, '✏️ ' + changes.join(' | '));
-        Object.assign(db.clients.find(c => c.id == activeModal), clientData);
     } else {
         const { data: newClients, error } = await insertClientSafe({
             ...clientData,
@@ -3031,16 +3094,25 @@ async function saveClient() {
         });
         if (error || !newClients || !newClients[0]) {
             console.error('Error creando clienta:', error);
-            showToast('Error al crear clienta: ' + (error?.message || 'verificá la conexión'), 'error');
-            btn.disabled = false;
-            return;
-        }
-        db.clients.push(newClients[0]);
+            const fallbackClient = {
+                ...clientData,
+                id: createLocalId('client'),
+                balance: 0,
+                debt: 0,
+                pendingSync: true
+            };
+            db.clients.push(fallbackClient);
+            persistCollectionLocal('clients', db.clients);
+            showToast('Clienta guardada localmente. Revisar sincronización con Supabase.', 'warning');
+        } else {
+            db.clients.push(newClients[0]);
+            persistCollectionLocal('clients', db.clients);
 
-        // Subir foto pendiente si se seleccionó durante la creación
-        if (window.pendingClientPhoto && newClients[0].id) {
-            await uploadClientPhoto(window.pendingClientPhoto, newClients[0].id);
-            window.pendingClientPhoto = null;
+            // Subir foto pendiente si se seleccionó durante la creación
+            if (window.pendingClientPhoto && newClients[0].id) {
+                await uploadClientPhoto(window.pendingClientPhoto, newClients[0].id);
+                window.pendingClientPhoto = null;
+            }
         }
     }
 
@@ -3496,12 +3568,12 @@ async function saveService() {
 
     if (!name) return;
 
-    const serviceData = {
+    const serviceData = withCurrentUser({
         name: name,
         price_type: type,
         price: type === 'fijo' ? price : null,
         duration: duration
-    };
+    });
 
     const submitBtn = document.querySelector('#fm-service [type="submit"]');
     submitBtn.disabled = true;
@@ -3526,22 +3598,41 @@ async function saveService() {
     if (editingServiceId) {
         const { error } = await svcUpsert(serviceData, true);
         if (error) {
-            showToast('Error al actualizar servicio', 'error');
-            submitBtn.disabled = false;
-            return;
+            console.error('[Service] Update Error:', error);
+            let s = db.services.find(x => x.id == editingServiceId);
+            if (!s) {
+                showToast('Error al actualizar servicio', 'error');
+                submitBtn.disabled = false;
+                return;
+            }
+            Object.assign(s, { name, priceType: type, price: serviceData.price, duration, pendingSync: true });
+            persistCollectionLocal('services', db.services);
+            showToast('Servicio guardado localmente. Revisar sincronización con Supabase.', 'warning');
+        } else {
+            let s = db.services.find(x => x.id == editingServiceId);
+            if (s) { s.name = name; s.priceType = type; s.price = serviceData.price; s.duration = duration; }
+            persistCollectionLocal('services', db.services);
+            showToast('Servicio actualizado');
         }
-        let s = db.services.find(x => x.id == editingServiceId);
-        if (s) { s.name = name; s.priceType = type; s.price = serviceData.price; s.duration = duration; }
-        showToast('Servicio actualizado');
     } else {
         const { data, error } = await svcUpsert(serviceData, false);
         if (error || !data || !data[0]) {
-            showToast('Error al crear servicio', 'error');
-            submitBtn.disabled = false;
-            return;
+            console.error('[Service] Insert Error:', error);
+            db.services.push({
+                id: createLocalId('srv'),
+                name,
+                priceType: type,
+                price: serviceData.price,
+                duration,
+                pendingSync: true
+            });
+            persistCollectionLocal('services', db.services);
+            showToast('Servicio guardado localmente. Revisar sincronización con Supabase.', 'warning');
+        } else {
+            db.services.push({ id: data[0].id, name: data[0].name, priceType: data[0].price_type, price: parseFloat(data[0].price) || null, duration: data[0].duration ? parseInt(data[0].duration) : null });
+            persistCollectionLocal('services', db.services);
+            showToast('Servicio creado');
         }
-        db.services.push({ id: data[0].id, name: data[0].name, priceType: data[0].price_type, price: parseFloat(data[0].price) || null, duration: data[0].duration ? parseInt(data[0].duration) : null });
-        showToast('Servicio creado');
     }
 
     submitBtn.disabled = false;
@@ -3581,15 +3672,15 @@ async function saveEmployee() {
     const name = document.getElementById('emp-name').value.trim();
     if (!name) return;
 
-    const empData = {
+    const empColor = document.getElementById('emp-color').value || '#7b52b5';
+    const empData = withCurrentUser({
         name: name,
         join_date: document.getElementById('emp-join-date').value || null,
         pay_day: parseInt(document.getElementById('emp-pay-day').value) || null,
         tips: parseFloat(document.getElementById('emp-tips').value) || 0,
         advances: parseFloat(document.getElementById('emp-advances').value) || 0,
-        user_id: getUserId()
-    };
-    const empColor = document.getElementById('emp-color').value || '#7b52b5';
+        color: empColor
+    });
 
     const submitBtn = document.querySelector('#fm-employee [type="submit"]');
     submitBtn.disabled = true;
@@ -3609,22 +3700,43 @@ async function saveEmployee() {
             }
         }
         if (error) {
-            showToast('Error al actualizar funcionaria', 'error');
             console.error('[Employee] Update Error:', error);
-            submitBtn.disabled = false;
-            return;
+            const localEmp = db.employees.find(x => x.id == editingEmployeeId);
+            if (!localEmp) {
+                showToast('Error al actualizar funcionaria', 'error');
+                submitBtn.disabled = false;
+                return;
+            }
+            Object.assign(localEmp, {
+                name: empData.name,
+                joinDate: empData.join_date,
+                join_date: empData.join_date,
+                payDay: empData.pay_day,
+                pay_day: empData.pay_day,
+                tips: empData.tips,
+                advances: empData.advances,
+                color: empColor,
+                pendingSync: true
+            });
+            persistCollectionLocal('employees', db.employees);
+            localStorage.setItem(`violet_emp_color_${editingEmployeeId}`, empColor);
+            showToast('Funcionaria guardada localmente. Revisar sincronización con Supabase.', 'warning');
+        } else {
+            let emp = db.employees.find(x => x.id == editingEmployeeId);
+            if (emp) {
+                emp.name = empData.name;
+                emp.joinDate = empData.join_date;
+                emp.join_date = empData.join_date;
+                emp.payDay = empData.pay_day;
+                emp.pay_day = empData.pay_day;
+                emp.tips = empData.tips;
+                emp.advances = empData.advances;
+                emp.color = empColor;
+            }
+            persistCollectionLocal('employees', db.employees);
+            localStorage.setItem(`violet_emp_color_${editingEmployeeId}`, empColor);
+            showToast('Funcionaria actualizada');
         }
-        let emp = db.employees.find(x => x.id == editingEmployeeId);
-        if (emp) { 
-            emp.name = empData.name; 
-            emp.joinDate = empData.join_date; 
-            emp.payDay = empData.pay_day; 
-            emp.tips = empData.tips; 
-            emp.advances = empData.advances; 
-            emp.color = empColor; 
-        }
-        localStorage.setItem(`violet_emp_color_${editingEmployeeId}`, empColor);
-        showToast('Funcionaria actualizada');
     } else {
         let { data, error } = await window.supabaseClient.from('employees').insert([empData]).select();
         if (error && error.message) {
@@ -3638,28 +3750,46 @@ async function saveEmployee() {
             }
         }
         if (error || !data || !data[0]) {
-            showToast('Error al agregar funcionaria', 'error');
             console.error('[Employee] Insert Error:', error);
-            submitBtn.disabled = false;
-            return;
+            const newEmp = {
+                id: createLocalId('emp'),
+                name: empData.name,
+                joinDate: empData.join_date,
+                join_date: empData.join_date,
+                payDay: empData.pay_day,
+                pay_day: empData.pay_day,
+                tips: empData.tips,
+                advances: empData.advances,
+                color: empColor,
+                pendingSync: true
+            };
+            db.employees.push(newEmp);
+            persistCollectionLocal('employees', db.employees);
+            localStorage.setItem(`violet_emp_color_${newEmp.id}`, empColor);
+            showToast('Funcionaria guardada localmente. Revisar sincronización con Supabase.', 'warning');
+        } else {
+            const newEmp = {
+                id: data[0].id,
+                name: data[0].name,
+                joinDate: data[0].join_date,
+                join_date: data[0].join_date,
+                payDay: data[0].pay_day,
+                pay_day: data[0].pay_day,
+                tips: parseFloat(data[0].tips) || 0,
+                advances: parseFloat(data[0].advances) || 0,
+                color: data[0].color || empColor
+            };
+            db.employees.push(newEmp);
+            persistCollectionLocal('employees', db.employees);
+            localStorage.setItem(`violet_emp_color_${data[0].id}`, newEmp.color);
+            showToast('Funcionaria agregada');
         }
-        const newEmp = { 
-            id: data[0].id, 
-            name: data[0].name, 
-            joinDate: data[0].join_date, 
-            payDay: data[0].pay_day, 
-            tips: parseFloat(data[0].tips) || 0, 
-            advances: parseFloat(data[0].advances) || 0, 
-            color: empColor 
-        };
-        db.employees.push(newEmp);
-        localStorage.setItem(`violet_emp_color_${data[0].id}`, empColor);
-        showToast('Funcionaria agregada');
     }
 
     submitBtn.disabled = false;
     updateFormSelects();
     renderEmployeesList();
+    if (typeof renderStaffPanel === 'function') renderStaffPanel();
     if (currentView === 'analytics') updateCharts();
     closeEmployeeModal();
 }
@@ -3698,47 +3828,97 @@ function renderServicesList() {
 }
 
 function renderEmployeesList() {
-    const list = document.getElementById('settings-employees-list');
-    list.innerHTML = '';
-    if (db.employees.length === 0) {
-        list.innerHTML = '<span style="color:var(--text-dim);font-size:0.85rem">No hay funcionarias registradas.</span>';
-        return;
-    }
-    db.employees.forEach(emp => {
-        const li = document.createElement('li');
-        li.className = 'task-item';
-        
-        let subText = [];
-        if (emp.payDay) subText.push('Pago: ' + emp.payDay);
-        if (emp.tips) subText.push('Propinas: $' + emp.tips);
-        if (emp.advances) subText.push('Adeuda: $' + emp.advances);
-        const empColor = emp.color || '#7b52b5';
+    const lists = ['settings-employees-list', 'staff-employees-list']
+        .map(id => document.getElementById(id))
+        .filter(Boolean);
 
-        li.innerHTML = `
-            <div style="flex:1;">
-                <span class="task-text"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${empColor};margin-right:6px;vertical-align:-1px;"></span><i data-lucide="user" style="width:14px;height:14px;margin-right:5px;vertical-align:-2px"></i> ${emp.name}</span>
-                ${subText.length > 0 ? `<div style="font-size:0.75rem; color:var(--text-dim); margin-left: 20px; margin-top:2px;">${subText.join(' | ')}</div>` : ''}
-            </div>
-            <div style="display:flex; gap: 5px;">
-                <button class="btn-icon btn-sm" onclick="openEmployeeModal('${emp.id}')" style="padding:0;color:var(--text-dim)"><i data-lucide="edit-2" style="width:14px;height:14px"></i></button>
-                <button class="btn-icon btn-sm btn-del-emp" data-id="${emp.id}" style="padding:0;color:var(--danger)"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
-            </div>
-        `;
-        list.appendChild(li);
+    lists.forEach(list => {
+        list.innerHTML = '';
+        if (db.employees.length === 0) {
+            list.innerHTML = '<span style="color:var(--text-dim);font-size:0.85rem">No hay funcionarias registradas.</span>';
+            return;
+        }
+        db.employees.forEach(emp => {
+            const li = document.createElement('li');
+            li.className = 'task-item';
+
+            let subText = [];
+            const payDay = emp.payDay || emp.pay_day;
+            if (payDay) subText.push('Pago: ' + payDay);
+            if (emp.tips) subText.push('Propinas: $' + fmt(emp.tips));
+            if (emp.advances) subText.push('Adelantos: $' + fmt(emp.advances));
+            if (emp.pendingSync) subText.push('Pendiente de sincronizar');
+            const empColor = emp.color || localStorage.getItem(`violet_emp_color_${emp.id}`) || '#7b52b5';
+
+            li.innerHTML = `
+                <div style="flex:1;">
+                    <span class="task-text"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${empColor};margin-right:6px;vertical-align:-1px;"></span><i data-lucide="user" style="width:14px;height:14px;margin-right:5px;vertical-align:-2px"></i> ${emp.name}</span>
+                    ${subText.length > 0 ? `<div style="font-size:0.75rem; color:var(--text-dim); margin-left: 20px; margin-top:2px;">${subText.join(' | ')}</div>` : ''}
+                </div>
+                <div style="display:flex; gap: 5px;">
+                    <button class="btn-icon btn-sm" onclick="openEmployeeModal('${emp.id}')" style="padding:0;color:var(--text-dim)"><i data-lucide="edit-2" style="width:14px;height:14px"></i></button>
+                    <button class="btn-icon btn-sm btn-del-emp" data-id="${emp.id}" style="padding:0;color:var(--danger)"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
+                </div>
+            `;
+            list.appendChild(li);
+        });
     });
 
     document.querySelectorAll('.btn-del-emp').forEach(btn => {
         btn.onclick = async (e) => {
             const id = e.currentTarget.getAttribute('data-id');
             const { error } = await window.supabaseClient.from('employees').delete().eq('id', id);
-            if (error) { showToast('Error al eliminar funcionaria', 'error'); return; }
+            if (error) console.warn('[Employee] Delete remote error:', error);
             db.employees = db.employees.filter(x => x.id != id);
+            persistCollectionLocal('employees', db.employees);
             updateFormSelects();
             renderEmployeesList();
+            if (typeof renderStaffPanel === 'function') renderStaffPanel();
             if (currentView === 'analytics') updateCharts();
         };
     });
+    renderStaffPanelSummary();
+    renderStaffBlockedList();
     refreshIcons();
+}
+
+function renderStaffPanel() {
+    renderEmployeesList();
+}
+
+function renderStaffPanelSummary() {
+    const setText = (id, value) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = value;
+    };
+    const totalTips = db.employees.reduce((sum, emp) => sum + (parseFloat(emp.tips) || 0), 0);
+    const totalAdvances = db.employees.reduce((sum, emp) => sum + (parseFloat(emp.advances) || 0), 0);
+    const cfg = typeof getBusinessConfig === 'function' ? getBusinessConfig() : {};
+    const blockedSlots = Array.isArray(cfg.blockedSlots) ? cfg.blockedSlots : [];
+
+    setText('staff-total-count', db.employees.length);
+    setText('staff-total-tips', '$' + fmt(totalTips));
+    setText('staff-total-advances', '$' + fmt(totalAdvances));
+    setText('staff-total-blocks', blockedSlots.length);
+}
+
+function renderStaffBlockedList() {
+    const list = document.getElementById('staff-blocked-list');
+    if (!list) return;
+    const cfg = typeof getBusinessConfig === 'function' ? getBusinessConfig() : {};
+    const blockedSlots = Array.isArray(cfg.blockedSlots) ? cfg.blockedSlots : [];
+    if (blockedSlots.length === 0) {
+        list.innerHTML = '<span style="color:var(--text-dim);font-size:0.85rem">No hay horarios bloqueados.</span>';
+        return;
+    }
+    list.innerHTML = blockedSlots.map(slot => {
+        const employee = db.employees.find(emp => String(emp.id) === String(slot.employeeId || slot.employee_id));
+        const staffName = employee ? employee.name : 'Staff no especificado';
+        const dateText = slot.date || slot.blockDate || 'Sin fecha';
+        const timeText = [slot.startTime || slot.start_time, slot.endTime || slot.end_time].filter(Boolean).join(' - ') || 'Sin horario';
+        const reason = slot.reason ? ` | ${slot.reason}` : '';
+        return `<li class="task-item"><span class="task-text"><i data-lucide="calendar-x" style="width:14px;height:14px;margin-right:5px;vertical-align:-2px"></i>${staffName}: ${dateText} ${timeText}${reason}</span></li>`;
+    }).join('');
 }
 
 // ==========================================

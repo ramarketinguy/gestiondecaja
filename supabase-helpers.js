@@ -7,6 +7,7 @@
 async function insertClientSafe(payload) {
     const userId = getUserId();
     if (userId) payload.user_id = userId;
+    else delete payload.user_id;
     let { data, error } = await window.supabaseClient.from('clients').insert([payload]).select();
     if (error && error.message) {
         const m = error.message.match(/Could not find the '(\w+)' column/i);
@@ -53,6 +54,7 @@ function findDuplicateClient(name, phone = '', excludeId = null) {
 async function insertTransactionSafe(payload) {
     const userId = getUserId();
     if (userId) payload.user_id = userId;
+    else delete payload.user_id;
     let { data, error } = await window.supabaseClient.from('transactions').insert([payload]).select();
     if (error && error.message) {
         const m = error.message.match(/Could not find the '(\w+)' column/i);
@@ -70,6 +72,7 @@ async function insertTransactionSafe(payload) {
 async function insertAppointmentSafe(payload) {
     const userId = getUserId();
     if (userId) payload.user_id = userId;
+    else delete payload.user_id;
     let { data, error } = await window.supabaseClient.from('appointments').insert([payload]).select();
     if (error && error.message) {
         const m = error.message.match(/Could not find the '(\w+)' column/i);
