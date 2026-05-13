@@ -48,7 +48,7 @@ Programa de gestión de caja/
 ├── README.md                     # Este archivo
 │
 └── Logo/
-    └── Logo Violet SF (1).png    # Branding
+    └── Logo Violet SF (1).webp   # Branding optimizado
 ```
 
 ---
