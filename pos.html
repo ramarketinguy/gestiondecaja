@@ -652,12 +652,15 @@
             </div>
 
             <div class="card">
-                <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
+                <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
                     <h2 class="card-title"><i data-lucide="users"></i> Panel de Staff</h2>
-                    <button class="btn btn-primary btn-sm" onclick="openEmployeeModal()"><i data-lucide="plus"></i> Nuevo Staff</button>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                        <button class="btn btn-ghost btn-sm" onclick="runStaffDedupe()" title="Fusionar duplicados por nombre"><i data-lucide="merge"></i> Limpiar duplicados</button>
+                        <button class="btn btn-primary btn-sm" onclick="openEmployeeModal()"><i data-lucide="plus"></i> Nuevo Staff</button>
+                    </div>
                 </div>
                 <div class="card-body" style="padding:1.5rem;">
-                    <ul class="task-list" id="staff-employees-list"></ul>
+                    <ul id="staff-employees-list"></ul>
                 </div>
             </div>
 

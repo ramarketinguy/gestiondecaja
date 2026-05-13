@@ -321,6 +321,8 @@ async function loadDataFromSupabase() {
     }
 
     if (successCount > 0) {
+        // Limpiar duplicados de empleadas que puedan haber quedado por bugs previos
+        try { if (typeof dedupeEmployees === 'function') await dedupeEmployees({ silent: true }); } catch (_) {}
         if (typeof initDashboard === 'function') initDashboard();
         // Re-render whichever view is currently active so late-arriving data
         // shows up everywhere (staff cards, analytics, caja, clients, etc.).
@@ -4067,71 +4069,238 @@ function renderEmployeesList() {
     });
 
     document.querySelectorAll('.btn-del-emp').forEach(btn => {
-        btn.onclick = async (e) => {
-            const id = e.currentTarget.getAttribute('data-id');
-            const { error } = await window.supabaseClient.from('employees').delete().eq('id', id);
-            if (error) console.warn('[Employee] Delete remote error:', error);
-            db.employees = db.employees.filter(x => x.id != id);
-            persistCollectionLocal('employees', db.employees);
-            updateFormSelects();
-            renderEmployeesList();
-            if (typeof renderStaffPanel === 'function') renderStaffPanel();
-            if (currentView === 'analytics') updateCharts();
-        };
+        btn.onclick = (e) => deleteEmployee(e.currentTarget.getAttribute('data-id'));
     });
     renderStaffPanelSummary();
     renderStaffBlockedList();
     refreshIcons();
 }
 
+async function deleteEmployee(id) {
+    const emp = db.employees.find(x => String(x.id) === String(id));
+    if (!emp) return;
+    if (!confirm(`¿Eliminar a ${emp.name}? Esta acción no se puede deshacer.`)) return;
+
+    const isLocalId = String(id).startsWith('emp_');
+    if (!isLocalId) {
+        try {
+            const { error } = await window.supabaseClient.from('employees').delete().eq('id', id);
+            if (error) console.warn('[Employee] Delete remote error:', error);
+        } catch (err) {
+            console.warn('[Employee] Delete remote exception:', err);
+        }
+    }
+    db.employees = db.employees.filter(x => String(x.id) !== String(id));
+    persistCollectionLocal('employees', db.employees);
+    try { localStorage.removeItem(`violet_emp_color_${id}`); } catch (_) {}
+    updateFormSelects();
+    renderEmployeesList();
+    if (typeof renderStaffPanel === 'function') renderStaffPanel();
+    if (currentView === 'analytics') updateCharts();
+    showToast(`${emp.name} eliminada`, 'success');
+}
+
+async function dedupeEmployees({ silent = true } = {}) {
+    if (!Array.isArray(db.employees) || db.employees.length < 2) return 0;
+    const groups = new Map();
+    db.employees.forEach(emp => {
+        if (!emp || !emp.name) return;
+        const key = String(emp.name).trim().toLowerCase();
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(emp);
+    });
+
+    let removed = 0;
+    const toRemoveRemote = [];
+    const keepers = [];
+
+    for (const [_, group] of groups) {
+        if (group.length === 1) { keepers.push(group[0]); continue; }
+        // Preferir IDs no-locales (vienen de Supabase: numéricos/uuid). Locales arrancan con "emp_".
+        group.sort((a, b) => {
+            const aLocal = String(a.id).startsWith('emp_') ? 1 : 0;
+            const bLocal = String(b.id).startsWith('emp_') ? 1 : 0;
+            return aLocal - bLocal;
+        });
+        const keeper = group[0];
+        const losers = group.slice(1);
+        losers.forEach(loser => {
+            keeper.tips = Math.max(parseFloat(keeper.tips) || 0, parseFloat(loser.tips) || 0);
+            keeper.advances = Math.max(parseFloat(keeper.advances) || 0, parseFloat(loser.advances) || 0);
+            keeper.payDay = keeper.payDay || keeper.pay_day || loser.payDay || loser.pay_day || null;
+            keeper.pay_day = keeper.pay_day || keeper.payDay || loser.pay_day || loser.payDay || null;
+            keeper.joinDate = keeper.joinDate || keeper.join_date || loser.joinDate || loser.join_date || null;
+            keeper.join_date = keeper.join_date || keeper.joinDate || loser.join_date || loser.joinDate || null;
+            keeper.color = keeper.color || loser.color || '#7b52b5';
+            if (!String(loser.id).startsWith('emp_')) toRemoveRemote.push(loser.id);
+            try { localStorage.removeItem(`violet_emp_color_${loser.id}`); } catch (_) {}
+            removed++;
+        });
+        keepers.push(keeper);
+    }
+
+    if (removed === 0) return 0;
+
+    for (const id of toRemoveRemote) {
+        try {
+            await window.supabaseClient.from('employees').delete().eq('id', id);
+        } catch (err) {
+            console.warn('[Dedupe] Error borrando duplicado remoto', id, err);
+        }
+    }
+    db.employees = keepers;
+    persistCollectionLocal('employees', db.employees);
+    if (!silent) showToast(`${removed} duplicado(s) de staff fusionados`, 'success');
+    console.log(`[Dedupe] ${removed} empleadas duplicadas fusionadas.`);
+    return removed;
+}
+
 function renderStaffPanel() {
+    dedupeEmployees({ silent: true });
     renderEmployeesList();
     renderStaffCards();
+}
+
+async function runStaffDedupe() {
+    const removed = await dedupeEmployees({ silent: false });
+    if (removed === 0) showToast('No se encontraron duplicados', 'info');
+    renderStaffPanel();
+    updateFormSelects();
 }
 
 function renderStaffCards() {
     const list = document.getElementById('staff-employees-list');
     if (!list) return;
     if (db.employees.length === 0) {
-        list.innerHTML = '<span style="color:var(--text-dim);font-size:0.85rem">No hay funcionarias registradas.</span>';
+        list.innerHTML = '<li style="list-style:none;color:var(--text-dim);font-size:0.9rem;text-align:center;padding:2rem;">No hay funcionarias registradas. Hacé clic en "+ Nuevo Staff" para agregar la primera.</li>';
         return;
     }
     const cfg = typeof getBusinessConfig === 'function' ? getBusinessConfig() : {};
     const blockedSlots = Array.isArray(cfg.blockedSlots) ? cfg.blockedSlots : [];
+    const todayISO = new Date().toISOString().slice(0, 10);
+
     list.innerHTML = db.employees.map(emp => {
         const empBlocks = blockedSlots.filter(b => String(b.employeeId || b.employee_id || '') === String(emp.id));
+        const upcomingBlocks = empBlocks.filter(b => (b.date || b.blockDate || '') >= todayISO);
         const empColor = emp.color || localStorage.getItem(`violet_emp_color_${emp.id}`) || '#7b52b5';
         const tips = parseFloat(emp.tips) || 0;
         const advances = parseFloat(emp.advances) || 0;
+        const initial = (emp.name || '?').trim().charAt(0).toUpperCase();
+        const payDay = emp.payDay || emp.pay_day || '-';
+        const joinDate = emp.joinDate || emp.join_date || '-';
+
+        const blocksHTML = upcomingBlocks.length === 0
+            ? '<div style="font-size:0.78rem;color:var(--text-dim);padding:8px 0;">Sin bloqueos próximos.</div>'
+            : upcomingBlocks.slice(0, 4).map((b, idx) => {
+                const date = b.date || b.blockDate || '-';
+                const start = b.start || b.startTime || b.start_time || '';
+                const end = b.end || b.endTime || b.end_time || '';
+                const reason = b.reason ? ` · ${b.reason}` : '';
+                const blockKey = `${date}|${start}|${end}|${emp.id}`;
+                return `<div class="staff-block-row"><span><i data-lucide="calendar-x" style="width:12px;height:12px;vertical-align:-1px;color:var(--danger)"></i> <strong>${date}</strong> ${start}–${end}${reason}</span><button class="btn-icon btn-sm btn-unblock-slot" data-key="${blockKey}" title="Quitar bloqueo" style="color:var(--danger);padding:2px 6px;"><i data-lucide="x" style="width:12px;height:12px"></i></button></div>`;
+            }).join('') + (upcomingBlocks.length > 4 ? `<div style="font-size:0.72rem;color:var(--text-dim);margin-top:4px;">+${upcomingBlocks.length - 4} más</div>` : '');
+
         return `
-            <li class="staff-card" style="border-left:4px solid ${empColor};">
-                <div class="staff-card-main">
-                    <div>
-                        <div class="staff-name"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${empColor};margin-right:8px;"></span>${emp.name}</div>
-                        <div class="staff-meta">Pago: ${emp.payDay || emp.pay_day || '-'} | Ingreso: ${emp.joinDate || emp.join_date || '-'}</div>
+            <li class="staff-card-v2" data-id="${emp.id}" style="border-left:4px solid ${empColor};">
+                <div class="staff-card-head">
+                    <div class="staff-avatar" style="background:${empColor};">${initial}</div>
+                    <div style="flex:1;min-width:0;">
+                        <div class="staff-name-v2">${emp.name}</div>
+                        <div class="staff-sub">Pago: día <strong>${payDay}</strong> · Ingreso: <strong>${joinDate}</strong></div>
                     </div>
-                    <div class="staff-metrics">
-                        <span>Propinas: <strong>$${fmt(tips)}</strong></span>
-                        <span>Adelantos: <strong>$${fmt(advances)}</strong></span>
-                        <span>Bloqueos: <strong>${empBlocks.length}</strong></span>
+                    <div class="staff-card-head-actions">
+                        <button class="btn-icon" onclick="openEmployeeModal('${emp.id}')" title="Editar"><i data-lucide="edit-2"></i></button>
+                        <button class="btn-icon btn-del-staff-card" data-id="${emp.id}" title="Eliminar" style="color:var(--danger);"><i data-lucide="trash-2"></i></button>
                     </div>
                 </div>
-                <div class="staff-actions">
-                    <button class="btn btn-ghost btn-sm" onclick="openEmployeeModal('${emp.id}')"><i data-lucide="edit-2"></i> Editar</button>
-                    <button class="btn btn-ghost btn-sm btn-staff-advance" data-id="${emp.id}"><i data-lucide="banknote"></i> Cargar adelanto</button>
-                    <button class="btn btn-ghost btn-sm btn-staff-block" data-id="${emp.id}"><i data-lucide="calendar-x"></i> Bloquear turno</button>
+
+                <div class="staff-metrics-grid">
+                    <div class="staff-metric staff-metric-tips">
+                        <div class="staff-metric-label"><i data-lucide="heart"></i> Propinas</div>
+                        <div class="staff-metric-value">$${fmt(tips)}</div>
+                    </div>
+                    <div class="staff-metric staff-metric-adv">
+                        <div class="staff-metric-label"><i data-lucide="trending-down"></i> Adelantos</div>
+                        <div class="staff-metric-value">$${fmt(advances)}</div>
+                    </div>
+                    <div class="staff-metric staff-metric-blocks">
+                        <div class="staff-metric-label"><i data-lucide="calendar-x"></i> Bloqueos</div>
+                        <div class="staff-metric-value">${upcomingBlocks.length}</div>
+                    </div>
+                </div>
+
+                <div class="staff-actions-v2">
+                    <button class="btn btn-ghost btn-sm btn-staff-tip" data-id="${emp.id}"><i data-lucide="heart"></i> Propina</button>
+                    <button class="btn btn-ghost btn-sm btn-staff-advance" data-id="${emp.id}"><i data-lucide="banknote"></i> Adelanto</button>
+                    <button class="btn btn-ghost btn-sm btn-staff-block" data-id="${emp.id}"><i data-lucide="calendar-x"></i> Bloquear</button>
+                </div>
+
+                <div class="staff-blocks-section">
+                    <div class="staff-blocks-title">Horarios bloqueados</div>
+                    ${blocksHTML}
                 </div>
             </li>
         `;
     }).join('');
 
+    list.querySelectorAll('.btn-staff-tip').forEach(btn => {
+        btn.onclick = () => addStaffTip(btn.dataset.id);
+    });
     list.querySelectorAll('.btn-staff-advance').forEach(btn => {
         btn.onclick = () => addStaffAdvance(btn.dataset.id);
     });
     list.querySelectorAll('.btn-staff-block').forEach(btn => {
         btn.onclick = () => addStaffBlock(btn.dataset.id);
     });
+    list.querySelectorAll('.btn-del-staff-card').forEach(btn => {
+        btn.onclick = () => deleteEmployee(btn.dataset.id);
+    });
+    list.querySelectorAll('.btn-unblock-slot').forEach(btn => {
+        btn.onclick = () => removeStaffBlock(btn.dataset.key);
+    });
     refreshIcons();
+}
+
+async function addStaffTip(employeeId) {
+    const emp = db.employees.find(e => String(e.id) === String(employeeId));
+    if (!emp) return;
+    const raw = prompt(`Monto de propina para ${emp.name}:`, '');
+    if (raw === null) return;
+    const amount = parseFloat(String(raw).replace(',', '.'));
+    if (isNaN(amount) || amount <= 0) return showToast('Monto inválido.', 'error');
+    emp.tips = (parseFloat(emp.tips) || 0) + amount;
+    persistCollectionLocal('employees', db.employees);
+    try {
+        const { error } = await window.supabaseClient.from('employees').update({ tips: emp.tips }).eq('id', emp.id);
+        if (error) throw error;
+        showToast(`Propina de $${fmt(amount)} registrada para ${emp.name}`, 'success');
+    } catch (err) {
+        emp.pendingSync = true;
+        persistCollectionLocal('employees', db.employees);
+        console.error('[Staff] Error guardando propina:', err);
+        showToast('Propina guardada localmente', 'warning');
+    }
+    renderStaffPanel();
+}
+
+function removeStaffBlock(blockKey) {
+    if (!blockKey) return;
+    const [date, start, end, empId] = blockKey.split('|');
+    const cfg = getBusinessConfig();
+    cfg.blockedSlots = Array.isArray(cfg.blockedSlots) ? cfg.blockedSlots : [];
+    const before = cfg.blockedSlots.length;
+    cfg.blockedSlots = cfg.blockedSlots.filter(b => {
+        const bDate = b.date || b.blockDate || '';
+        const bStart = b.start || b.startTime || b.start_time || '';
+        const bEnd = b.end || b.endTime || b.end_time || '';
+        const bEmp = String(b.employeeId || b.employee_id || '');
+        return !(bDate === date && bStart === start && bEnd === end && bEmp === String(empId));
+    });
+    if (cfg.blockedSlots.length === before) return;
+    saveBusinessConfig(cfg);
+    renderStaffPanel();
+    if (typeof renderAgenda === 'function') renderAgenda(document.getElementById('agenda-date-picker')?.value || date);
+    showToast('Bloqueo eliminado', 'success');
 }
 
 async function addStaffAdvance(employeeId) {
