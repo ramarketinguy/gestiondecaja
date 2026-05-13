@@ -327,13 +327,9 @@ async function loadDataFromSupabase() {
                 error = retry.error;
             }
 
-            if (!error && userId && Array.isArray(data) && data.length === 0 && ['clients', 'services', 'employees', 'appointments', 'transactions', 'tasks'].includes(table.name)) {
-                console.warn(`[SYNC] ${table.name}: sin filas con user_id. Reintentando lectura legacy sin filtro.`);
-                let legacyQuery = client.from(table.name).select('*');
-                if (table.order) legacyQuery = legacyQuery.order(table.order.col, { ascending: table.order.asc });
-                const legacy = await legacyQuery;
-                if (!legacy.error && Array.isArray(legacy.data) && legacy.data.length > 0) data = legacy.data;
-            }
+            // NOTA: previamente había un fallback "legacy" que recargaba sin filtro user_id
+            // cuando data.length === 0. Se eliminó porque cargaba filas de OTROS user_ids
+            // (data leak cross-account) y causaba duplicados visibles en el dropdown.
 
             if (error) {
                 console.warn(`⚠️ Error en ${table.name}:`, error.message);
@@ -351,7 +347,8 @@ async function loadDataFromSupabase() {
                 // Usa db desde state.js actualizando ahí
                 db[table.stateKey] = table.transform ? data.map(table.transform) : data;
                 const localRows = getLocalDataSnapshot()[table.stateKey];
-                db[table.stateKey] = mergeCloudAndLocalRows(db[table.stateKey], localRows);
+                const dedupeByName = ['employees', 'services'].includes(table.name);
+                db[table.stateKey] = mergeCloudAndLocalRows(db[table.stateKey], localRows, { dedupeByName });
                 state.data = db; // sincroniza alias
                 persistCollectionLocal(table.stateKey, db[table.stateKey]);
                 console.log(`✅ ${table.name}: ${data.length} registros cargados.`);
@@ -426,13 +423,22 @@ function persistCollectionLocal(collection, records) {
     saveLocalDataSnapshot(snapshot);
 }
 
-function mergeCloudAndLocalRows(cloudRows, localRows) {
+function mergeCloudAndLocalRows(cloudRows, localRows, opts = {}) {
     const merged = Array.isArray(cloudRows) ? [...cloudRows] : [];
     if (!Array.isArray(localRows)) return merged;
+    const dedupeByName = opts.dedupeByName === true;
     localRows.forEach(localRow => {
         if (!localRow || localRow.deleted) return;
-        const exists = merged.some(cloudRow => String(cloudRow.id) === String(localRow.id));
-        if (!exists) merged.push(localRow);
+        const existsById = merged.some(cloudRow => String(cloudRow.id) === String(localRow.id));
+        if (existsById) return;
+        // Para colecciones con nombres únicos (employees, services), si ya existe una fila
+        // cloud con el mismo nombre, no agregar el local — es duplicado por ID stale.
+        if (dedupeByName && localRow.name) {
+            const localName = String(localRow.name).trim().toLowerCase();
+            const sameName = merged.some(c => c && c.name && String(c.name).trim().toLowerCase() === localName);
+            if (sameName) return;
+        }
+        merged.push(localRow);
     });
     return merged;
 }
