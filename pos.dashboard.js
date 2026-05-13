@@ -70,7 +70,37 @@ function renderDashboardTareas() {
         addBtn.onclick = () => {
             const row = document.getElementById('task-input-container');
             if (row) row.classList.toggle('hidden');
+            const input = document.getElementById('new-task-input');
+            if (input && row && !row.classList.contains('hidden')) input.focus();
         };
+    }
+
+    const input = document.getElementById('new-task-input');
+    if (input && !input.dataset.bound) {
+        input.dataset.bound = '1';
+        input.addEventListener('keydown', async (e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            const text = input.value.trim();
+            if (!text) return;
+            const payload = { text, completed: false };
+            const userId = typeof getUserId === 'function' ? getUserId() : null;
+            if (userId) payload.user_id = userId;
+            let saved = null;
+            try {
+                const { data, error } = await window.supabaseClient.from('tasks').insert([payload]).select();
+                if (error) throw error;
+                saved = data?.[0] || null;
+            } catch (err) {
+                console.error('[DASHBOARD] Error creando tarea:', err);
+            }
+            const task = saved || { id: createLocalId('task'), ...payload, pendingSync: true };
+            db.tasks.push(task);
+            persistCollectionLocal('tasks', db.tasks);
+            input.value = '';
+            renderDashboardTareas();
+            if (typeof showToast === 'function') showToast(saved ? 'Tarea cargada' : 'Tarea guardada localmente', saved ? 'success' : 'warning');
+        });
     }
 
     const tasks = db?.tasks || [];
@@ -103,6 +133,7 @@ function renderDashboardTareas() {
                     const { error } = await window.supabaseClient.from('tasks').update({ completed: task.completed }).eq('id', id);
                     if (error) throw error;
                     renderDashboardTareas();
+                    persistCollectionLocal('tasks', db.tasks);
                 } catch (err) {
                     console.error('[DASHBOARD] Error actualizando tarea:', err);
                     if (typeof showToast === 'function') showToast('Error al actualizar tarea', 'error');
@@ -121,6 +152,7 @@ function renderDashboardTareas() {
                     const { error } = await window.supabaseClient.from('tasks').delete().eq('id', id);
                     if (error) throw error;
                     db.tasks = tasks.filter(x => x.id != id);
+                    persistCollectionLocal('tasks', db.tasks);
                     renderDashboardTareas();
                     if (typeof showToast === 'function') showToast('Tarea eliminada', 'success');
                 } catch (err) {
@@ -176,7 +208,9 @@ function renderDashboardAgendaResumen() {
 
     const today = new Date().toISOString().split('T')[0];
     const appointments = db?.appointments || [];
-    const todaysApts = appointments.filter(a => a.date === today).sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+    const aptDate = (a) => typeof getAppointmentDate === 'function' ? getAppointmentDate(a) : (a.date || a.apt_date || '');
+    const aptTime = (a) => typeof getAppointmentTime === 'function' ? getAppointmentTime(a) : ((a.time || a.apt_time || '').slice(0, 5));
+    const todaysApts = appointments.filter(a => aptDate(a) === today).sort((a, b) => aptTime(a).localeCompare(aptTime(b)));
 
     if (todaysApts.length === 0) {
         list.innerHTML = '<span style="color:var(--text-dim);font-size:0.85rem">Sin citas para hoy</span>';
@@ -186,9 +220,9 @@ function renderDashboardAgendaResumen() {
     todaysApts.forEach(apt => {
         list.innerHTML += `
             <div class="widget-list-item" style="border-left:3px solid var(--gold-400);">
-                <div style="font-weight:700;color:var(--gold-400);min-width:70px;">${(apt.time || '').slice(0,5)}</div>
+                <div style="font-weight:700;color:var(--gold-400);min-width:70px;">${aptTime(apt)}</div>
                 <div class="info" style="flex:1;">
-                    <span class="main-text">${apt.clientName}</span>
+                    <span class="main-text">${apt.clientName || apt.client_name || 'Sin cliente'}</span>
                     <span class="sub-text">${apt.service || 'Visita'}</span>
                 </div>
             </div>

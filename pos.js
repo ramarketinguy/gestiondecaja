@@ -45,6 +45,29 @@ function withCurrentUser(payload) {
     return payload;
 }
 
+function getAppointmentDate(apt) {
+    return apt?.date || apt?.apt_date || '';
+}
+
+function getAppointmentTime(apt) {
+    return (apt?.time || apt?.apt_time || '').slice(0, 5);
+}
+
+function getAppointmentEmployeeId(apt) {
+    return apt?.employeeId || apt?.employee_id || null;
+}
+
+function getTxEmployeeName(tx) {
+    if (!tx) return '';
+    if (tx.employee) return tx.employee;
+    const empId = tx.employee_id || tx.employeeId;
+    return db.employees.find(e => String(e.id) === String(empId))?.name || '';
+}
+
+function txIsTip(tx) {
+    return isTipTransaction(tx);
+}
+
 // ==========================================
 // 0. INICIALIZACIÓN DE EMERGENCIA - VERSIÓN SIMPLIFICADA
 // ==========================================
@@ -206,16 +229,17 @@ async function loadDataFromSupabase() {
             clientId: t.client_id,
             detail: t.detail,
             method: t.method,
-            employee: t.employee
+            employee: t.employee,
+            employeeId: t.employee_id || null
         })},
         { name: 'appointments', stateKey: 'appointments', transform: a => ({
             ...a,
-            date: a.apt_date,
-            time: a.apt_time,
+            date: a.apt_date || a.date,
+            time: (a.apt_time || a.time || '').slice(0, 5),
             clientId: a.client_id,
             clientName: a.client_name,
             serviceId: a.service_id,
-            employeeId: a.employee_id
+            employeeId: a.employee_id || a.employeeId
         })},
         { name: 'tasks', stateKey: 'tasks', order: { col: 'created_at', asc: true } },
         { name: 'services', stateKey: 'services', transform: s => ({
@@ -754,6 +778,7 @@ function initAgenda() {
                 } else {
                     timeline.classList.remove('hidden');
                     monthView.classList.add('hidden');
+                    renderAgenda(picker.value);
                 }
             });
         });
@@ -871,14 +896,15 @@ async function editAppointment(id) {
     const apt = db.appointments.find(a => String(a.id) === String(id));
     if (!apt) return;
     editingAppointmentId = id;
-    openAgendarModal(apt.date, (apt.time || '').slice(0, 5));
-    document.getElementById('apt-client-name').value = apt.clientName || '';
+    openAgendarModal(getAppointmentDate(apt), getAppointmentTime(apt));
+    document.getElementById('apt-client-name').value = apt.clientName || apt.client_name || '';
     aptCurrentClient = db.clients.find(c => c.id == apt.clientId) || null;
     const aptSrv = document.getElementById('apt-service');
     if (aptSrv) { aptSrv.value = apt.service || ''; syncCustomSelect('apt-service'); }
     document.getElementById('apt-notes').value = apt.notes || '';
     const aptEmp = document.getElementById('apt-employee');
-    if (aptEmp && apt.employeeId) { aptEmp.value = apt.employeeId; syncCustomSelect('apt-employee'); }
+    const aptEmpId = getAppointmentEmployeeId(apt);
+    if (aptEmp && aptEmpId) { aptEmp.value = aptEmpId; syncCustomSelect('apt-employee'); }
     const title = document.getElementById('apt-modal-title');
     if (title) title.textContent = 'Editar Cita';
 }
@@ -995,8 +1021,8 @@ async function saveAppointment() {
     const end = new Date(start.getTime() + duration * 60000);
 
     const hasCollision = db.appointments.some(a => {
-        if (a.employee_id != aptEmployeeId || a.apt_date !== dateInput) return false;
-        const aStart = new Date(`${a.apt_date}T${a.apt_time}`);
+        if (String(getAppointmentEmployeeId(a) || '') !== String(aptEmployeeId || '') || getAppointmentDate(a) !== dateInput) return false;
+        const aStart = new Date(`${getAppointmentDate(a)}T${getAppointmentTime(a)}`);
         const aService = db.services.find(s => s.name === a.service);
         const aDuration = aService && aService.duration ? aService.duration : 60;
         const aEnd = new Date(aStart.getTime() + aDuration * 60000);
@@ -1149,7 +1175,7 @@ function renderAgendaMonth() {
         const dayDate = new Date(year, month, d);
         const dow = dayDate.getDay();
         const isClosed = (cfg.closedDays || []).includes(dow);
-        const apts = db.appointments.filter(a => a.date === dateStr);
+        const apts = db.appointments.filter(a => getAppointmentDate(a) === dateStr);
         const birthdays = db.clients.filter(c => {
             if (!c.birthday) return false;
             const [, bm, bd] = c.birthday.split('-').map(n => parseInt(n));
@@ -1222,8 +1248,8 @@ function renderAgendaSidePanel(dateStr) {
 
     // Citas del día (clickable → abrir para editar/eliminar)
     const apts = db.appointments
-        .filter(a => a.date === dateStr)
-        .sort((a, b) => normTime(a.time).localeCompare(normTime(b.time)));
+        .filter(a => getAppointmentDate(a) === dateStr)
+        .sort((a, b) => getAppointmentTime(a).localeCompare(getAppointmentTime(b)));
     html += `<h5 style="font-size:.75rem;color:var(--text-dim);text-transform:uppercase;margin:.8rem 0 .4rem;">Citas (${apts.length})</h5>`;
     if (apts.length === 0) {
         html += `<div style="color:var(--text-dim);font-size:.8rem;">Sin citas programadas.</div>`;
@@ -1231,7 +1257,7 @@ function renderAgendaSidePanel(dateStr) {
         html += apts.map(a => `<div class="apt-chip" data-apt-id="${a.id}" style="padding:6px 10px;background:rgba(91,58,138,0.15);border-left:3px solid var(--violet-400);border-radius:4px;margin-bottom:4px;font-size:.82rem;cursor:pointer;transition:background .15s;">
             <div style="display:flex;justify-content:space-between;align-items:center;">
                 <div>
-                    <strong>${normTime(a.time) || '--:--'}</strong> · ${a.clientName}<br>
+                    <strong>${getAppointmentTime(a) || '--:--'}</strong> · ${a.clientName || a.client_name || 'Sin cliente'}<br>
                     <span style="color:var(--text-dim);font-size:.72rem;">${a.service || 'Servicio s/e'}</span>
                 </div>
                 <div style="display:flex;gap:6px;">
@@ -1269,15 +1295,16 @@ function renderAgendaSidePanel(dateStr) {
             let totalBusyCount = 0;
             const busyEmpIds = [];
             apts.forEach(a => {
-                if (!a.time) return;
-                const sTime = toMin(normTime(a.time));
+                if (!getAppointmentTime(a)) return;
+                const sTime = toMin(getAppointmentTime(a));
                 const srv = db.services.find(s => s.name === a.service);
                 const duration = srv && srv.duration ? parseInt(srv.duration) : 30;
                 const eTime = sTime + duration;
                 
                 if (t >= sTime && t < eTime) {
                     totalBusyCount++;
-                    if (a.employee_id) busyEmpIds.push(a.employee_id);
+                    const busyEmpId = getAppointmentEmployeeId(a);
+                    if (busyEmpId) busyEmpIds.push(busyEmpId);
                 }
             });
 
@@ -1364,7 +1391,7 @@ function renderAgendaSidePanel(dateStr) {
             const id = btn.dataset.aptId;
             const apt = db.appointments.find(a => String(a.id) === String(id));
             if (!apt) return;
-            if (!confirm(`¿Eliminar la cita de ${apt.clientName} el ${apt.date} a las ${(apt.time||'').slice(0,5)}?`)) return;
+            if (!confirm(`¿Eliminar la cita de ${apt.clientName || apt.client_name} el ${getAppointmentDate(apt)} a las ${getAppointmentTime(apt)}?`)) return;
             const { error } = await window.supabaseClient.from('appointments').delete().eq('id', id);
             if (error) { console.error(error); showToast('Error eliminando cita: ' + error.message, 'error'); return; }
             db.appointments = db.appointments.filter(a => String(a.id) !== String(id));
@@ -1394,7 +1421,9 @@ function renderAgenda(dateStr) {
     timeline.innerHTML = '';
 
     const normTime = (t) => (t || '').slice(0, 5);
-    const dayApts = db.appointments.filter(a => a.date === dateStr).sort((a,b) => normTime(a.time).localeCompare(normTime(b.time)));
+    const dayApts = db.appointments
+        .filter(a => getAppointmentDate(a) === dateStr)
+        .sort((a,b) => getAppointmentTime(a).localeCompare(getAppointmentTime(b)));
 
     if (dayApts.length === 0) {
         timeline.innerHTML = `<div class="empty-state"><i data-lucide="coffee"></i><p>Sin citas para este día.</p></div>`;
@@ -1404,7 +1433,7 @@ function renderAgenda(dateStr) {
 
     // Render as card-based timeline (no dependency on slot DOM elements)
     dayApts.forEach(apt => {
-        const emp = db.employees.find(e => e.id == apt.employee_id);
+        const emp = db.employees.find(e => String(e.id) === String(getAppointmentEmployeeId(apt)));
         const empColor = emp && emp.color ? emp.color : 'var(--accent)';
         const service = db.services.find(s => s.name === apt.service);
         const duration = service && service.duration ? service.duration : 60;
@@ -1419,7 +1448,7 @@ function renderAgenda(dateStr) {
         eventEl.style.cursor = 'pointer';
         eventEl.style.transition = 'transform 0.15s, box-shadow 0.15s';
         eventEl.innerHTML = `
-            <div class="event-time" style="font-weight:700;font-size:0.9rem;">${normTime(apt.time) || '--:--'}</div>
+            <div class="event-time" style="font-weight:700;font-size:0.9rem;">${getAppointmentTime(apt) || '--:--'}</div>
             <div class="event-title" style="font-size:0.85rem;margin-top:2px;">${apt.client_name || apt.clientName || 'Sin cliente'}</div>
             <div class="event-desc" style="font-size:0.75rem;color:rgba(255,255,255,0.7);margin-top:2px;">${apt.service || 'Servicio'} ${emp ? '· ' + emp.name : ''} · ${duration}min</div>
         `;
@@ -1537,7 +1566,7 @@ function initPOS() {
                 tipFields.classList.remove('hidden');
                 tipFields.style.display = 'grid';
             } else {
-                tipFields.classList.remove('hidden');
+                tipFields.classList.add('hidden');
                 tipFields.style.display = '';
             }
         });
@@ -1660,13 +1689,15 @@ function updateFormSelects() {
     }
 
     // Select de empleada
+    const prevEmployee = employeeSelect.value;
     employeeSelect.innerHTML = '<option value="" disabled selected style="display:none">Seleccione empleada...</option>';
     db.employees.forEach(e => {
         const opt = document.createElement('option');
-        opt.value = e.name;
+        opt.value = e.id;
         opt.textContent = e.name;
         employeeSelect.appendChild(opt);
     });
+    if (prevEmployee && db.employees.some(e => String(e.id) === String(prevEmployee))) employeeSelect.value = prevEmployee;
 
     // Select de empleada en modal de agenda (guarda el ID para scope de bloqueos)
     const aptEmpSelect = document.getElementById('apt-employee');
@@ -1910,10 +1941,21 @@ async function saveTransaction() {
         client_id: null,
         detail: '',
         method: '',
-        employee: document.getElementById('employee').value
+        employee: ''
     };
 
     if (isIncome) {
+        const employeeSelect = document.getElementById('employee');
+        const selectedEmployeeId = employeeSelect?.value || '';
+        const selectedEmployee = db.employees.find(e => String(e.id) === String(selectedEmployeeId));
+        if (!selectedEmployee) {
+            showToast('Seleccione el staff que realizó el servicio.', 'error');
+            document.getElementById('btn-save-transaction').disabled = false;
+            return;
+        }
+        transactionSchema.employee = selectedEmployee.name;
+        transactionSchema.employee_id = selectedEmployee.id;
+
         const clientInput = document.getElementById('client-name').value.trim();
         transactionSchema.client_name = currentClient ? currentClient.name : clientInput;
         transactionSchema.client_id = currentClient ? currentClient.id : null;
@@ -2054,7 +2096,8 @@ async function saveTransaction() {
             db.transactions.push({
                 id: t.id, date: t.transaction_date, isIncome: t.is_income,
                 amount: parseFloat(t.amount), clientName: t.client_name,
-                clientId: t.client_id, detail: t.detail, method: t.method, employee: t.employee
+                clientId: t.client_id, detail: t.detail, method: t.method, employee: t.employee,
+                employeeId: t.employee_id || transactionSchema.employee_id || null
             });
         });
         persistCollectionLocal('transactions', db.transactions);
@@ -2062,7 +2105,7 @@ async function saveTransaction() {
         // Manejar propina en la empleada si se guardó
         if (tipTx) {
             const tipAmt = tipTx.amount;
-            const emp = db.employees.find(e => e.name === transactionSchema.employee);
+            const emp = db.employees.find(e => String(e.id) === String(transactionSchema.employee_id) || e.name === transactionSchema.employee);
             if (emp) {
                 const newTips = (parseFloat(emp.tips) || 0) + tipAmt;
                 const { error: empErr } = await window.supabaseClient.from('employees').update({ tips: newTips }).eq('id', emp.id);
@@ -2120,6 +2163,7 @@ async function saveTransaction() {
             detail: tx.detail,
             method: tx.method,
             employee: tx.employee,
+            employeeId: tx.employee_id || null,
             pendingSync: true
         }));
         localRows.forEach(tx => db.transactions.push(tx));
@@ -2162,7 +2206,7 @@ function renderTransactionsTable() {
     }).reverse();
 
     if (todays.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="5" class="empty-state" style="padding: 2rem;"><p>Caja limpia por ahora.</p></td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6" class="empty-state" style="padding: 2rem;"><p>Caja limpia por ahora.</p></td></tr>`;
         return;
     }
 
@@ -2178,6 +2222,8 @@ function renderTransactionsTable() {
     Object.values(grouped).forEach(group => {
         if (group.length === 1) {
             const t = group[0];
+            const tipAmount = txIsTip(t) ? t.amount : 0;
+            const rowAmount = txIsTip(t) ? 0 : t.amount;
             const time = new Date(t.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
             const bCl = t.isIncome
                 ? (t.method==='efectivo' ? 'badge-efectivo'
@@ -2190,14 +2236,18 @@ function renderTransactionsTable() {
             const methodLabel = t.method === 'tarjeta_debito' ? 'T.Débito'
                 : t.method === 'tarjeta_credito' ? 'T.Crédito' : t.method;
 
+            if (t.isIncome && !txIsTip(t)) totalIncome += t.amount;
+            if (!t.isIncome) totalEgreso += t.amount;
+
             tbody.innerHTML += `
                 <tr class="tx-row" data-tx-id="${t.id}" style="cursor:pointer;" title="Ver detalle">
                     <td style="color:var(--text-dim);white-space:nowrap;">${time}</td>
-                    <td><strong>${t.isIncome ? (t.clientName || 'General') : 'Retiro'}</strong><br><small style="color:var(--text-dim)">${t.employee || ''}</small></td>
+                    <td><strong>${t.isIncome ? (t.clientName || 'General') : 'Retiro'}</strong><br><small style="color:var(--text-dim)">${getTxEmployeeName(t)}</small></td>
                     <td style="max-width:250px;white-space:normal;" title="${t.detail}">${cleanDetail}</td>
                     <td><span class="badge ${bCl}">${t.isIncome ? 'Ingreso' : 'Egreso'}</span></td>
+                    <td style="color:${tipAmount ? 'var(--gold-400)' : 'var(--text-dim)'}; font-weight:700;" class="text-right">${tipAmount ? '$' + fmt(tipAmount) : '-'}</td>
                     <td style="color:${t.isIncome ? 'var(--success)' : 'var(--danger)'}; font-weight:700;" class="text-right">
-                        ${t.isIncome ? '+' : '-'}$${fmt(t.amount)}
+                        ${t.isIncome ? '+' : '-'}$${fmt(rowAmount)}
                     </td>
                 </tr>`;
         } else {
@@ -2205,10 +2255,12 @@ function renderTransactionsTable() {
             const time = new Date(tMain.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
             let sumAmount = 0;
             let methodLabels = [];
+            let tipAmount = 0;
             let fullDetailHTML = `<div style="display:flex; flex-direction:column; gap:4px; margin-top: 6px; padding-left: 8px; border-left: 2px solid var(--border);">`;
             
             group.forEach(g => {
-                if (g.isIncome) { sumAmount += g.amount; totalIncome += g.amount; }
+                if (txIsTip(g)) { tipAmount += g.amount; }
+                else if (g.isIncome) { sumAmount += g.amount; totalIncome += g.amount; }
                 else { sumAmount -= g.amount; totalEgreso += g.amount; }
                 
                 const gMethodLabel = g.method === 'tarjeta_debito' ? 'T.Débito' : g.method === 'tarjeta_credito' ? 'T.Crédito' : g.method;
@@ -2222,11 +2274,12 @@ function renderTransactionsTable() {
             tbody.innerHTML += `
                 <tr class="tx-row" data-tx-ids="${txIds}" style="cursor:pointer;" title="Movimiento Mixto">
                     <td style="color:var(--text-dim);white-space:nowrap;">${time}</td>
-                    <td><strong>${tMain.isIncome ? (tMain.clientName || 'General') : 'Retiro'}</strong><br><small style="color:var(--text-dim)">${tMain.employee || ''}</small></td>
+                    <td><strong>${tMain.isIncome ? (tMain.clientName || 'General') : 'Retiro'}</strong><br><small style="color:var(--text-dim)">${getTxEmployeeName(tMain)}</small></td>
                     <td>
                         <div style="font-weight:600;">${tMain.detail.split(' (')[0]} <span class="badge" style="background:rgba(91,58,138,0.1); color:var(--primary-light); border:1px solid var(--primary-light); font-size:0.6rem; padding: 1px 4px;">Mixto</span></div>
                     </td>
                     <td><span class="badge" style="background:rgba(255,255,255,0.05); color:var(--text-secondary); border:1px solid var(--border-subtle);">Ingreso</span></td>
+                    <td style="color:${tipAmount ? 'var(--gold-400)' : 'var(--text-dim)'}; font-weight:700;" class="text-right">${tipAmount ? '$' + fmt(tipAmount) : '-'}</td>
                     <td style="color:${sumAmount >= 0 ? 'var(--success)' : 'var(--danger)'}; font-weight:700;" class="text-right">
                         ${sumAmount >= 0 ? '+' : '-'}$${fmt(Math.abs(sumAmount))}
                     </td>
@@ -2237,7 +2290,7 @@ function renderTransactionsTable() {
     // Fila de totales al pie
     tbody.innerHTML += `
         <tr style="border-top:2px solid var(--border-subtle); background:rgba(0,0,0,0.2);">
-            <td colspan="3" style="font-weight:700; font-size:0.85rem; color:var(--text-secondary);">
+            <td colspan="4" style="font-weight:700; font-size:0.85rem; color:var(--text-secondary);">
                 ${todays.length} movimientos
                 ${totalEgreso > 0 ? `<span style="color:var(--danger);margin-left:12px;">Egresos: -$${fmt(totalEgreso)}</span>` : ''}
             </td>
@@ -2996,7 +3049,7 @@ function renderClientHistory(clientId) {
         const dateStr = new Date(dateKey + 'T12:00:00').toLocaleDateString('es-UY', { day:'2-digit', month:'2-digit', year:'numeric' });
         
         // Buscar notas de citas para este día
-        const aptNote = db.appointments.find(a => a.clientId == clientId && a.date === dateKey)?.notes;
+        const aptNote = db.appointments.find(a => a.clientId == clientId && getAppointmentDate(a) === dateKey)?.notes;
         const noteHtml = aptNote ? `<div style="font-size:0.7rem; color:var(--info); margin-top:4px; font-style:italic;">Nota: ${aptNote}</div>` : '';
 
         return group.map(t => {
@@ -3884,6 +3937,96 @@ function renderEmployeesList() {
 
 function renderStaffPanel() {
     renderEmployeesList();
+    renderStaffCards();
+}
+
+function renderStaffCards() {
+    const list = document.getElementById('staff-employees-list');
+    if (!list) return;
+    if (db.employees.length === 0) {
+        list.innerHTML = '<span style="color:var(--text-dim);font-size:0.85rem">No hay funcionarias registradas.</span>';
+        return;
+    }
+    const cfg = typeof getBusinessConfig === 'function' ? getBusinessConfig() : {};
+    const blockedSlots = Array.isArray(cfg.blockedSlots) ? cfg.blockedSlots : [];
+    list.innerHTML = db.employees.map(emp => {
+        const empBlocks = blockedSlots.filter(b => String(b.employeeId || b.employee_id || '') === String(emp.id));
+        const empColor = emp.color || localStorage.getItem(`violet_emp_color_${emp.id}`) || '#7b52b5';
+        const tips = parseFloat(emp.tips) || 0;
+        const advances = parseFloat(emp.advances) || 0;
+        return `
+            <li class="staff-card" style="border-left:4px solid ${empColor};">
+                <div class="staff-card-main">
+                    <div>
+                        <div class="staff-name"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${empColor};margin-right:8px;"></span>${emp.name}</div>
+                        <div class="staff-meta">Pago: ${emp.payDay || emp.pay_day || '-'} | Ingreso: ${emp.joinDate || emp.join_date || '-'}</div>
+                    </div>
+                    <div class="staff-metrics">
+                        <span>Propinas: <strong>$${fmt(tips)}</strong></span>
+                        <span>Adelantos: <strong>$${fmt(advances)}</strong></span>
+                        <span>Bloqueos: <strong>${empBlocks.length}</strong></span>
+                    </div>
+                </div>
+                <div class="staff-actions">
+                    <button class="btn btn-ghost btn-sm" onclick="openEmployeeModal('${emp.id}')"><i data-lucide="edit-2"></i> Editar</button>
+                    <button class="btn btn-ghost btn-sm btn-staff-advance" data-id="${emp.id}"><i data-lucide="banknote"></i> Cargar adelanto</button>
+                    <button class="btn btn-ghost btn-sm btn-staff-block" data-id="${emp.id}"><i data-lucide="calendar-x"></i> Bloquear turno</button>
+                </div>
+            </li>
+        `;
+    }).join('');
+
+    list.querySelectorAll('.btn-staff-advance').forEach(btn => {
+        btn.onclick = () => addStaffAdvance(btn.dataset.id);
+    });
+    list.querySelectorAll('.btn-staff-block').forEach(btn => {
+        btn.onclick = () => addStaffBlock(btn.dataset.id);
+    });
+    refreshIcons();
+}
+
+async function addStaffAdvance(employeeId) {
+    const emp = db.employees.find(e => String(e.id) === String(employeeId));
+    if (!emp) return;
+    const raw = prompt(`Monto del adelanto para ${emp.name}:`, '');
+    if (raw === null) return;
+    const amount = parseFloat(String(raw).replace(',', '.'));
+    if (isNaN(amount) || amount <= 0) return showToast('Monto inválido.', 'error');
+    emp.advances = (parseFloat(emp.advances) || 0) + amount;
+    emp.payDay = emp.payDay || emp.pay_day || null;
+    emp.joinDate = emp.joinDate || emp.join_date || null;
+    persistCollectionLocal('employees', db.employees);
+    try {
+        const { error } = await window.supabaseClient.from('employees').update({ advances: emp.advances }).eq('id', emp.id);
+        if (error) throw error;
+        showToast('Adelanto cargado', 'success');
+    } catch (err) {
+        emp.pendingSync = true;
+        persistCollectionLocal('employees', db.employees);
+        console.error('[Staff] Error guardando adelanto:', err);
+        showToast('Adelanto guardado localmente', 'warning');
+    }
+    renderStaffPanel();
+}
+
+async function addStaffBlock(employeeId) {
+    const emp = db.employees.find(e => String(e.id) === String(employeeId));
+    if (!emp) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const date = prompt(`Fecha a bloquear para ${emp.name} (AAAA-MM-DD):`, today);
+    if (!date) return;
+    const start = prompt('Hora inicio (HH:MM):', '09:00');
+    if (!start) return;
+    const end = prompt('Hora fin (HH:MM):', '10:00');
+    if (!end) return;
+    const reason = prompt('Motivo:', 'Bloqueo de horario') || '';
+    const cfg = getBusinessConfig();
+    cfg.blockedSlots = Array.isArray(cfg.blockedSlots) ? cfg.blockedSlots : [];
+    cfg.blockedSlots.push({ date, start, end, reason, employeeId: emp.id });
+    saveBusinessConfig(cfg);
+    renderStaffPanel();
+    if (typeof renderAgenda === 'function') renderAgenda(document.getElementById('agenda-date-picker')?.value || date);
+    showToast('Horario bloqueado', 'success');
 }
 
 function renderStaffPanelSummary() {
@@ -3915,7 +4058,7 @@ function renderStaffBlockedList() {
         const employee = db.employees.find(emp => String(emp.id) === String(slot.employeeId || slot.employee_id));
         const staffName = employee ? employee.name : 'Staff no especificado';
         const dateText = slot.date || slot.blockDate || 'Sin fecha';
-        const timeText = [slot.startTime || slot.start_time, slot.endTime || slot.end_time].filter(Boolean).join(' - ') || 'Sin horario';
+        const timeText = [slot.start || slot.startTime || slot.start_time, slot.end || slot.endTime || slot.end_time].filter(Boolean).join(' - ') || 'Sin horario';
         const reason = slot.reason ? ` | ${slot.reason}` : '';
         return `<li class="task-item"><span class="task-text"><i data-lucide="calendar-x" style="width:14px;height:14px;margin-right:5px;vertical-align:-2px"></i>${staffName}: ${dateText} ${timeText}${reason}</span></li>`;
     }).join('');
@@ -4065,7 +4208,7 @@ DATOS DEL NEGOCIO HOY:
 - Clientas frecuentes: ${topClients}
 - Servicios disponibles: ${db.services.map(s => s.name).join(', ') || 'sin configurar'}
 - Funcionarias: ${db.employees.map(e => e.name).join(', ') || 'sin configurar'}
-- Turnos hoy: ${db.appointments.filter(a => { const d = new Date(); return a.date === `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }).length}`;
+- Turnos hoy: ${db.appointments.filter(a => { const d = new Date(); return getAppointmentDate(a) === `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }).length}`;
 }
 
 let aiHistory = [];

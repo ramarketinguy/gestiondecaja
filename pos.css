@@ -97,7 +97,7 @@ body::before {
 @keyframes fadeInUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
 
 /* ═══════════ DASHBOARD (PENDIENTES) & WIDGETS ═══════════ */
-.dashboard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 1.5rem; }
+.dashboard-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.5rem; }
 .main-content { flex: 1; margin-left: var(--sidebar-w); padding: 2rem 2.5rem; overflow-y: auto; max-height: 100vh; position: relative; z-index: 1; max-width: 1400px; margin-right: auto; }
 .widget-card { background: var(--bg-card); border: 1px solid var(--border-card); border-radius: var(--radius-lg); display: flex; flex-direction: column; overflow: hidden; backdrop-filter: blur(12px); }
 .widget-header { display: flex; align-items: center; gap: 12px; padding: 1.2rem 1.5rem; border-bottom: 1px solid var(--border-subtle); background: rgba(0,0,0,0.1); }
@@ -105,6 +105,14 @@ body::before {
 .widget-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
 .widget-icon svg { width: 18px; height: 18px; }
 .widget-body { padding: 1.2rem 1.5rem; flex: 1; display: flex; flex-direction: column; gap: 0.8rem; height: 300px; overflow-y: auto; }
+
+.staff-card { list-style: none; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius); padding: 1rem; margin-bottom: .8rem; }
+.staff-card-main { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; }
+.staff-name { font-weight: 800; color: var(--text-primary); display: flex; align-items: center; }
+.staff-meta { color: var(--text-dim); font-size: .78rem; margin-top: .35rem; }
+.staff-metrics { display: flex; gap: .6rem; flex-wrap: wrap; justify-content: flex-end; color: var(--text-dim); font-size: .8rem; }
+.staff-metrics span { background: rgba(255,255,255,.04); border: 1px solid var(--border-subtle); border-radius: 999px; padding: .3rem .6rem; }
+.staff-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .9rem; }
 
 /* List styles for widgets */
 .widget-list-item { display: flex; align-items: center; justify-content: space-between; padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); background: var(--bg-input); }
