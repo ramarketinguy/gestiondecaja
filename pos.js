@@ -45,6 +45,13 @@ function withCurrentUser(payload) {
     return payload;
 }
 
+// Formateador monetario global (varias funciones locales lo redefinen, lo que es OK).
+// Las funciones que NO lo redefinen (renderEmployeesList, renderStaffCards) usan éste.
+function fmt(n) {
+    return Number(n || 0).toLocaleString('es-UY', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
+window.fmt = fmt;
+
 function getAppointmentDate(apt) {
     return apt?.date || apt?.apt_date || '';
 }
