@@ -88,6 +88,48 @@ function violetInit() {
     _violetInitDone = true;
     console.log('[VIOLET] violetInit() ejecutado');
 
+    // 0. Sembrar db.employees desde localStorage si está vacío y limpiar duplicados ANTES de poblar selects
+    try {
+        if (Array.isArray(db.employees) && db.employees.length === 0) {
+            const snap = (typeof getLocalDataSnapshot === 'function') ? getLocalDataSnapshot() : {};
+            if (Array.isArray(snap.employees) && snap.employees.length > 0) {
+                db.employees = snap.employees;
+            }
+        }
+        if (typeof dedupeEmployees === 'function' && db.employees.length > 1) {
+            // Dedupe síncrono (sin await): solo procesa locales para evitar parpadeo;
+            // dedupe completo (con Supabase) corre tras loadDataFromSupabase
+            const before = db.employees.length;
+            const groups = new Map();
+            db.employees.forEach(emp => {
+                if (!emp || !emp.name) return;
+                const key = String(emp.name).trim().toLowerCase();
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key).push(emp);
+            });
+            const keepers = [];
+            for (const group of groups.values()) {
+                if (group.length === 1) { keepers.push(group[0]); continue; }
+                group.sort((a, b) => (String(a.id).startsWith('emp_') ? 1 : 0) - (String(b.id).startsWith('emp_') ? 1 : 0));
+                const keeper = group[0];
+                group.slice(1).forEach(loser => {
+                    keeper.tips = Math.max(parseFloat(keeper.tips) || 0, parseFloat(loser.tips) || 0);
+                    keeper.advances = Math.max(parseFloat(keeper.advances) || 0, parseFloat(loser.advances) || 0);
+                    keeper.payDay = keeper.payDay || keeper.pay_day || loser.payDay || loser.pay_day || null;
+                    keeper.joinDate = keeper.joinDate || keeper.join_date || loser.joinDate || loser.join_date || null;
+                });
+                keepers.push(keeper);
+            }
+            if (keepers.length !== before) {
+                db.employees = keepers;
+                if (typeof persistCollectionLocal === 'function') persistCollectionLocal('employees', keepers);
+                console.log(`[VIOLET] Dedupe inicial: ${before} → ${keepers.length} empleadas.`);
+            }
+        }
+    } catch (e) {
+        console.warn('[VIOLET] Dedupe inicial falló:', e);
+    }
+
     try {
         // 1. Mostrar fecha
         const sidebarDate = document.getElementById('sidebar-date');
@@ -4155,16 +4197,18 @@ async function dedupeEmployees({ silent = true } = {}) {
     return removed;
 }
 
-function renderStaffPanel() {
-    dedupeEmployees({ silent: true });
+async function renderStaffPanel() {
+    await dedupeEmployees({ silent: true });
     renderEmployeesList();
     renderStaffCards();
+    if (typeof updateFormSelects === 'function') updateFormSelects();
 }
 
 async function runStaffDedupe() {
     const removed = await dedupeEmployees({ silent: false });
     if (removed === 0) showToast('No se encontraron duplicados', 'info');
-    renderStaffPanel();
+    renderEmployeesList();
+    renderStaffCards();
     updateFormSelects();
 }
 
