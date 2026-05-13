@@ -322,6 +322,29 @@ async function loadDataFromSupabase() {
 
     if (successCount > 0) {
         if (typeof initDashboard === 'function') initDashboard();
+        // Re-render whichever view is currently active so late-arriving data
+        // shows up everywhere (staff cards, analytics, caja, clients, etc.).
+        try {
+            const view = (typeof currentView !== 'undefined' && currentView) || 'dashboard';
+            if (view === 'caja') {
+                if (typeof updateStats === 'function') updateStats();
+                if (typeof renderTransactionsTable === 'function') renderTransactionsTable();
+            } else if (view === 'clients' && typeof renderClientsTable === 'function') {
+                renderClientsTable();
+            } else if (view === 'staff' && typeof renderStaffPanel === 'function') {
+                renderStaffPanel();
+            } else if (view === 'analytics' && typeof updateCharts === 'function') {
+                updateCharts();
+            } else if (view === 'agenda' && typeof renderAgenda === 'function') {
+                renderAgenda(document.getElementById('agenda-date-picker')?.value);
+            }
+            // Refrescar selects con clientes/empleadas/servicios cargados desde la nube
+            if (typeof updateFormSelects === 'function') updateFormSelects();
+            if (typeof renderEmployeesList === 'function') renderEmployeesList();
+            if (typeof renderServicesList === 'function') renderServicesList();
+        } catch (e) {
+            console.warn('[SYNC] Re-render post-carga falló:', e);
+        }
     } else {
         console.error("No se pudo cargar ninguna tabla. Revisa las políticas de RLS en Supabase o si los datos tienen el user_id correcto.");
         showToast('Sin acceso a datos en la nube', 'error');
@@ -554,7 +577,12 @@ function initNavigation() {
         else if (viewId === 'caja') { updateStats(); renderTransactionsTable(); }
         else if (viewId === 'clients') renderClientsTable();
         else if (viewId === 'staff') renderStaffPanel();
-        else if (viewId === 'analytics') updateCharts();
+        else if (viewId === 'analytics') {
+            // El tab activo por defecto es "Historial de Cierres". Renderizamos
+            // ambos contenidos (cierres + stats) y dejamos visible el activo.
+            if (typeof renderClosuresHistory === 'function') renderClosuresHistory();
+            updateCharts();
+        }
     }
 
     // Botón cerrar sesión
@@ -2284,7 +2312,9 @@ function renderTransactionsTable() {
                     </td>
                 </tr>`;
         } else {
-            const tMain = group[0];
+            // Prefer the non-tip transaction as the displayed "main" so the row
+            // shows the actual service name, not "Propina — ...".
+            const tMain = group.find(g => !txIsTip(g)) || group[0];
             const time = new Date(tMain.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
             let sumAmount = 0;
             let methodLabels = [];
@@ -2495,6 +2525,14 @@ function switchAnalyticsTab(tabId) {
     }
     const btn = document.querySelector(`.analytics-tabs .tab-btn[data-tab="${tabId}"]`);
     if (btn) btn.classList.add('active');
+
+    // Re-render the content of whichever tab the user just opened so charts
+    // and tables size correctly (Chart.js mis-sizes when canvas is hidden).
+    if (tabId === 'stats-closures' && typeof renderClosuresHistory === 'function') {
+        renderClosuresHistory();
+    } else if (tabId === 'stats-main' && typeof updateCharts === 'function') {
+        updateCharts();
+    }
 }
 
 function openCashClosureModal() {
@@ -3234,6 +3272,9 @@ async function saveClient() {
 // initAnalytics merged above
 
 function updateCharts() {
+    // 0. Tarjetas de resumen (mes corriente)
+    updateAnalyticsStatCards();
+
     // 1. Ingresos últimos 7 días (datos reales)
     const dayNames = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
     const last7Days = [];
@@ -3340,6 +3381,36 @@ function updateCharts() {
 
     renderEmployeeCashTable();
     renderServicesRanking();
+}
+
+function updateAnalyticsStatCards() {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const inCurrentMonth = (val) => {
+        if (!val) return false;
+        const d = new Date(val);
+        return !isNaN(d) && d.getFullYear() === year && d.getMonth() === month;
+    };
+
+    const monthlyIncomeTx = (db.transactions || []).filter(t =>
+        t.isIncome && !isTipTransaction(t) && t.method !== 'seña' && inCurrentMonth(t.date)
+    );
+    const monthlyIncome = monthlyIncomeTx.reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
+
+    const monthlyAppointments = (db.appointments || []).filter(a => inCurrentMonth(getAppointmentDate(a))).length;
+
+    const monthlyNewClients = (db.clients || []).filter(c => inCurrentMonth(c.created_at || c.createdAt)).length;
+
+    const avgTicket = monthlyIncomeTx.length ? monthlyIncome / monthlyIncomeTx.length : 0;
+
+    const fmtMoney = n => '$' + Number(n).toLocaleString('es-UY', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+    const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+
+    setText('stat-income-month', fmtMoney(monthlyIncome));
+    setText('stat-appointments-count', monthlyAppointments);
+    setText('stat-new-clients', monthlyNewClients);
+    setText('stat-avg-ticket', fmtMoney(avgTicket));
 }
 
 function renderEmployeeCashTable() {
@@ -3788,7 +3859,9 @@ function closeEmployeeModal() {
     editingEmployeeId = null;
 }
 
+let _savingEmployee = false;
 async function saveEmployee() {
+    if (_savingEmployee) return;
     const name = document.getElementById('emp-name').value.trim();
     if (!name) return;
 
@@ -3802,8 +3875,11 @@ async function saveEmployee() {
         color: empColor
     });
 
+    _savingEmployee = true;
     const submitBtn = document.querySelector('#fm-employee [type="submit"]');
-    submitBtn.disabled = true;
+    if (submitBtn) submitBtn.disabled = true;
+
+    try {
 
     if (editingEmployeeId) {
         // No enviar user_id en updates (es inmutable)
@@ -3906,12 +3982,18 @@ async function saveEmployee() {
         }
     }
 
-    submitBtn.disabled = false;
-    updateFormSelects();
-    renderEmployeesList();
-    if (typeof renderStaffPanel === 'function') renderStaffPanel();
-    if (currentView === 'analytics') updateCharts();
-    closeEmployeeModal();
+    } catch (err) {
+        console.error('[Employee] Excepción al guardar:', err);
+        showToast('Error inesperado al guardar', 'error');
+    } finally {
+        _savingEmployee = false;
+        if (submitBtn) submitBtn.disabled = false;
+        updateFormSelects();
+        renderEmployeesList();
+        if (typeof renderStaffPanel === 'function') renderStaffPanel();
+        if (currentView === 'analytics') updateCharts();
+        closeEmployeeModal();
+    }
 }
 
 function renderServicesList() {
