@@ -162,6 +162,7 @@ function violetInit() {
         if (typeof initAnalytics === 'function') initAnalytics();
         if (typeof initSettings === 'function') initSettings();
         if (typeof renderStaffPanel === 'function') renderStaffPanel();
+        if (typeof initStaffModals === 'function') initStaffModals();
         if (typeof initAIChat === 'function') initAIChat();
         if (typeof checkBirthdayAlert === 'function') checkBirthdayAlert();
 
@@ -4301,13 +4302,13 @@ function renderStaffCards() {
     }).join('');
 
     list.querySelectorAll('.btn-staff-tip').forEach(btn => {
-        btn.onclick = () => addStaffTip(btn.dataset.id);
+        btn.onclick = () => openStaffTipModal(btn.dataset.id);
     });
     list.querySelectorAll('.btn-staff-advance').forEach(btn => {
-        btn.onclick = () => addStaffAdvance(btn.dataset.id);
+        btn.onclick = () => openStaffAdvanceModal(btn.dataset.id);
     });
     list.querySelectorAll('.btn-staff-block').forEach(btn => {
-        btn.onclick = () => addStaffBlock(btn.dataset.id);
+        btn.onclick = () => openStaffBlockModal(btn.dataset.id);
     });
     list.querySelectorAll('.btn-del-staff-card').forEach(btn => {
         btn.onclick = () => deleteEmployee(btn.dataset.id);
@@ -4318,13 +4319,24 @@ function renderStaffCards() {
     refreshIcons();
 }
 
-async function addStaffTip(employeeId) {
+function openStaffTipModal(employeeId) {
     const emp = db.employees.find(e => String(e.id) === String(employeeId));
     if (!emp) return;
-    const raw = prompt(`Monto de propina para ${emp.name}:`, '');
-    if (raw === null) return;
-    const amount = parseFloat(String(raw).replace(',', '.'));
-    if (isNaN(amount) || amount <= 0) return showToast('Monto inválido.', 'error');
+    document.getElementById('staff-tip-emp-id').value = emp.id;
+    document.getElementById('staff-tip-target').textContent = emp.name;
+    document.getElementById('staff-tip-amount').value = '';
+    document.getElementById('modal-staff-tip').classList.add('open');
+    setTimeout(() => document.getElementById('staff-tip-amount').focus(), 80);
+    refreshIcons();
+}
+
+async function submitStaffTip(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    const empId = document.getElementById('staff-tip-emp-id').value;
+    const amount = parseFloat(document.getElementById('staff-tip-amount').value);
+    const emp = db.employees.find(x => String(x.id) === String(empId));
+    if (!emp) return;
+    if (isNaN(amount) || amount <= 0) return showToast('Monto inválido', 'error');
     emp.tips = (parseFloat(emp.tips) || 0) + amount;
     persistCollectionLocal('employees', db.employees);
     try {
@@ -4337,6 +4349,7 @@ async function addStaffTip(employeeId) {
         console.error('[Staff] Error guardando propina:', err);
         showToast('Propina guardada localmente', 'warning');
     }
+    document.getElementById('modal-staff-tip').classList.remove('open');
     renderStaffPanel();
 }
 
@@ -4360,13 +4373,24 @@ function removeStaffBlock(blockKey) {
     showToast('Bloqueo eliminado', 'success');
 }
 
-async function addStaffAdvance(employeeId) {
+function openStaffAdvanceModal(employeeId) {
     const emp = db.employees.find(e => String(e.id) === String(employeeId));
     if (!emp) return;
-    const raw = prompt(`Monto del adelanto para ${emp.name}:`, '');
-    if (raw === null) return;
-    const amount = parseFloat(String(raw).replace(',', '.'));
-    if (isNaN(amount) || amount <= 0) return showToast('Monto inválido.', 'error');
+    document.getElementById('staff-advance-emp-id').value = emp.id;
+    document.getElementById('staff-advance-target').textContent = emp.name;
+    document.getElementById('staff-advance-amount').value = '';
+    document.getElementById('modal-staff-advance').classList.add('open');
+    setTimeout(() => document.getElementById('staff-advance-amount').focus(), 80);
+    refreshIcons();
+}
+
+async function submitStaffAdvance(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    const empId = document.getElementById('staff-advance-emp-id').value;
+    const amount = parseFloat(document.getElementById('staff-advance-amount').value);
+    const emp = db.employees.find(x => String(x.id) === String(empId));
+    if (!emp) return;
+    if (isNaN(amount) || amount <= 0) return showToast('Monto inválido', 'error');
     emp.advances = (parseFloat(emp.advances) || 0) + amount;
     emp.payDay = emp.payDay || emp.pay_day || null;
     emp.joinDate = emp.joinDate || emp.join_date || null;
@@ -4374,34 +4398,120 @@ async function addStaffAdvance(employeeId) {
     try {
         const { error } = await window.supabaseClient.from('employees').update({ advances: emp.advances }).eq('id', emp.id);
         if (error) throw error;
-        showToast('Adelanto cargado', 'success');
+        showToast(`Adelanto de $${fmt(amount)} cargado para ${emp.name}`, 'success');
     } catch (err) {
         emp.pendingSync = true;
         persistCollectionLocal('employees', db.employees);
         console.error('[Staff] Error guardando adelanto:', err);
         showToast('Adelanto guardado localmente', 'warning');
     }
+    document.getElementById('modal-staff-advance').classList.remove('open');
     renderStaffPanel();
 }
 
-async function addStaffBlock(employeeId) {
+function openStaffBlockModal(employeeId) {
     const emp = db.employees.find(e => String(e.id) === String(employeeId));
     if (!emp) return;
     const today = new Date().toISOString().slice(0, 10);
-    const date = prompt(`Fecha a bloquear para ${emp.name} (AAAA-MM-DD):`, today);
-    if (!date) return;
-    const start = prompt('Hora inicio (HH:MM):', '09:00');
-    if (!start) return;
-    const end = prompt('Hora fin (HH:MM):', '10:00');
-    if (!end) return;
-    const reason = prompt('Motivo:', 'Bloqueo de horario') || '';
+    document.getElementById('staff-block-emp-id').value = emp.id;
+    document.getElementById('staff-block-target').textContent = emp.name;
+    // Default: día completo
+    const fullDayRadio = document.querySelector('input[name="staff-block-type"][value="full-day"]');
+    if (fullDayRadio) fullDayRadio.checked = true;
+    document.getElementById('staff-block-date').value = today;
+    document.getElementById('staff-block-start').value = '09:00';
+    document.getElementById('staff-block-end').value = '18:00';
+    document.getElementById('staff-block-date-from').value = today;
+    document.getElementById('staff-block-date-to').value = today;
+    document.getElementById('staff-block-reason').value = '';
+    updateStaffBlockSections();
+    document.getElementById('modal-staff-block').classList.add('open');
+    refreshIcons();
+}
+
+function updateStaffBlockSections() {
+    const type = document.querySelector('input[name="staff-block-type"]:checked')?.value || 'full-day';
+    const sDate = document.getElementById('staff-block-section-date');
+    const sTime = document.getElementById('staff-block-section-time');
+    const sRange = document.getElementById('staff-block-section-daterange');
+    if (sDate) sDate.style.display = (type === 'full-day' || type === 'time-range') ? 'block' : 'none';
+    if (sTime) sTime.style.display = (type === 'time-range') ? 'grid' : 'none';
+    if (sRange) sRange.style.display = (type === 'date-range') ? 'grid' : 'none';
+}
+
+function submitStaffBlock(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    const empId = document.getElementById('staff-block-emp-id').value;
+    const emp = db.employees.find(x => String(x.id) === String(empId));
+    if (!emp) return;
+    const type = document.querySelector('input[name="staff-block-type"]:checked')?.value || 'full-day';
+    const reason = document.getElementById('staff-block-reason').value.trim();
     const cfg = getBusinessConfig();
     cfg.blockedSlots = Array.isArray(cfg.blockedSlots) ? cfg.blockedSlots : [];
-    cfg.blockedSlots.push({ date, start, end, reason, employeeId: emp.id });
+
+    const added = [];
+    if (type === 'full-day') {
+        const date = document.getElementById('staff-block-date').value;
+        if (!date) return showToast('Fecha requerida', 'error');
+        added.push({ date, start: '00:00', end: '23:59', reason: reason || 'Día completo', employeeId: emp.id });
+    } else if (type === 'time-range') {
+        const date = document.getElementById('staff-block-date').value;
+        const start = document.getElementById('staff-block-start').value;
+        const end = document.getElementById('staff-block-end').value;
+        if (!date || !start || !end) return showToast('Faltan datos del horario', 'error');
+        if (start >= end) return showToast('Hora fin debe ser mayor que inicio', 'error');
+        added.push({ date, start, end, reason, employeeId: emp.id });
+    } else if (type === 'date-range') {
+        const from = document.getElementById('staff-block-date-from').value;
+        const to = document.getElementById('staff-block-date-to').value;
+        if (!from || !to) return showToast('Faltan fechas', 'error');
+        if (from > to) return showToast('Fecha "hasta" debe ser >= "desde"', 'error');
+        // Generar un bloqueo por cada día del rango (inclusive)
+        const [y1, m1, d1] = from.split('-').map(Number);
+        const [y2, m2, d2] = to.split('-').map(Number);
+        const start = new Date(y1, m1 - 1, d1);
+        const end = new Date(y2, m2 - 1, d2);
+        for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+            const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            added.push({ date: ds, start: '00:00', end: '23:59', reason: reason || 'Día completo', employeeId: emp.id });
+        }
+    }
+    cfg.blockedSlots.push(...added);
     saveBusinessConfig(cfg);
+    document.getElementById('modal-staff-block').classList.remove('open');
     renderStaffPanel();
-    if (typeof renderAgenda === 'function') renderAgenda(document.getElementById('agenda-date-picker')?.value || date);
-    showToast('Horario bloqueado', 'success');
+    if (typeof renderAgenda === 'function') renderAgenda(document.getElementById('agenda-date-picker')?.value);
+    showToast(`Bloqueo${added.length > 1 ? 's' : ''} guardado${added.length > 1 ? `s (${added.length} días)` : ''}`, 'success');
+}
+
+function initStaffModals() {
+    if (initStaffModals._done) return;
+    initStaffModals._done = true;
+
+    const wire = (modalId, formId, submitFn) => {
+        const overlay = document.getElementById(modalId);
+        if (!overlay) return;
+        // Close buttons
+        overlay.querySelectorAll('[data-close]').forEach(btn => {
+            btn.onclick = () => overlay.classList.remove('open');
+        });
+        // Click on overlay (no en el modal)
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) overlay.classList.remove('open');
+        });
+        // Form submit
+        const form = document.getElementById(formId);
+        if (form) form.addEventListener('submit', submitFn);
+    };
+
+    wire('modal-staff-tip', 'fm-staff-tip', submitStaffTip);
+    wire('modal-staff-advance', 'fm-staff-advance', submitStaffAdvance);
+    wire('modal-staff-block', 'fm-staff-block', submitStaffBlock);
+
+    // Cambio de tipo de bloqueo
+    document.querySelectorAll('input[name="staff-block-type"]').forEach(r => {
+        r.addEventListener('change', updateStaffBlockSections);
+    });
 }
 
 function renderStaffPanelSummary() {

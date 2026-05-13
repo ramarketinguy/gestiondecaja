@@ -143,6 +143,16 @@ body::before {
 .staff-block-row:last-child { border-bottom: none; }
 .staff-block-row .btn-icon { background: transparent; border: 1px solid transparent; cursor: pointer; }
 .staff-block-row .btn-icon:hover { background: rgba(255,77,77,.08); border-color: var(--danger); }
+
+/* Selector de tipo de bloqueo (radio buttons custom como cards) */
+.block-type-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem; margin-top: .4rem; }
+.block-type-option { position: relative; cursor: pointer; }
+.block-type-option input[type="radio"] { position: absolute; opacity: 0; pointer-events: none; }
+.block-type-option span { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .35rem; padding: .8rem .5rem; background: rgba(255,255,255,.03); border: 1.5px solid var(--border-subtle); border-radius: var(--radius-sm); font-size: .78rem; color: var(--text-dim); text-align: center; transition: all .15s ease; }
+.block-type-option span svg { width: 18px; height: 18px; }
+.block-type-option:hover span { border-color: var(--violet-300); color: var(--text-secondary); }
+.block-type-option input[type="radio"]:checked + span { border-color: var(--violet-400); background: rgba(155,114,212,.12); color: var(--violet-200); font-weight: 600; }
+.block-type-option input[type="radio"]:checked + span svg { color: var(--violet-200); }
 .weekly-hours-grid { display: grid; gap: .7rem; margin-top: .7rem; }
 .weekly-hours-row { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: .7rem; align-items: center; padding: .7rem; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: rgba(0,0,0,.14); }
 .weekly-day { display: flex; align-items: center; gap: .45rem; color: var(--text-secondary); font-size: .86rem; }
