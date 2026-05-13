@@ -9,7 +9,9 @@ function initDashboard() {
     renderDashboardTareas();
     renderDashboardDeudas();
     renderDashboardAgendaResumen();
+    if (typeof refreshIcons === 'function') refreshIcons();
 }
+
 
 function renderDashboardCumpleanos() {
     const list = document.getElementById('widget-birthdays');
@@ -55,7 +57,9 @@ function renderDashboardCumpleanos() {
             </div>
         `;
     });
+    if (typeof refreshIcons === 'function') refreshIcons();
 }
+
 
 function renderDashboardTareas() {
     const list = document.getElementById('task-list');
@@ -95,8 +99,17 @@ function renderDashboardTareas() {
             const task = tasks.find(x => x.id == id);
             if (task && window.supabaseClient) {
                 task.completed = e.target.checked;
-                await window.supabaseClient.from('tasks').update({ completed: task.completed }).eq('id', id);
-                renderDashboardTareas();
+                try {
+                    const { error } = await window.supabaseClient.from('tasks').update({ completed: task.completed }).eq('id', id);
+                    if (error) throw error;
+                    renderDashboardTareas();
+                } catch (err) {
+                    console.error('[DASHBOARD] Error actualizando tarea:', err);
+                    if (typeof showToast === 'function') showToast('Error al actualizar tarea', 'error');
+                    // Revertir estado local si falló la red
+                    task.completed = !task.completed;
+                    e.target.checked = task.completed;
+                }
             }
         };
     });
@@ -104,14 +117,21 @@ function renderDashboardTareas() {
     list.querySelectorAll('.task-del').forEach(btn => {
         btn.onclick = async (e) => {
             const id = e.currentTarget.dataset.id;
-            if (window.supabaseClient) {
-                await window.supabaseClient.from('tasks').delete().eq('id', id);
-                db.tasks = tasks.filter(x => x.id != id);
-                renderDashboardTareas();
-            }
+                try {
+                    const { error } = await window.supabaseClient.from('tasks').delete().eq('id', id);
+                    if (error) throw error;
+                    db.tasks = tasks.filter(x => x.id != id);
+                    renderDashboardTareas();
+                    if (typeof showToast === 'function') showToast('Tarea eliminada', 'success');
+                } catch (err) {
+                    console.error('[DASHBOARD] Error eliminando tarea:', err);
+                    if (typeof showToast === 'function') showToast('Error al eliminar tarea', 'error');
+                }
         };
     });
+    if (typeof refreshIcons === 'function') refreshIcons();
 }
+
 
 function renderDashboardDeudas() {
     const list = document.getElementById('widget-debts');
@@ -145,7 +165,9 @@ function renderDashboardDeudas() {
             </div>
         `;
     });
+    if (typeof refreshIcons === 'function') refreshIcons();
 }
+
 
 function renderDashboardAgendaResumen() {
     const list = document.getElementById('widget-agenda');
@@ -172,6 +194,8 @@ function renderDashboardAgendaResumen() {
             </div>
         `;
     });
+    if (typeof refreshIcons === 'function') refreshIcons();
 }
+
 
 console.log('[DASHBOARD] Módulo cargado');

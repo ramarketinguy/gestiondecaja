@@ -6,6 +6,10 @@
 async function loadBusinessConfigFromSupabase() {
     if (!window.supabaseClient) return null;
 
+    if (typeof getUserId !== 'function') {
+        console.warn('[CONFIG] getUserId no definido');
+        return null;
+    }
     const userId = getUserId();
     if (!userId) return null;
 
@@ -23,8 +27,13 @@ async function loadBusinessConfigFromSupabase() {
         lunchStart: data.lunch_start,
         lunchEnd: data.lunch_end,
         closedDays: data.closed_days || [],
-        timeFormat: data.time_format || '24h'
+        timeFormat: data.time_format || '24h',
+        blockedSlots: data.blocked_slots || []
     };
+}
+
+function saveBusinessConfig(cfg) {
+    saveBusinessConfigBoth(cfg);
 }
 
 async function saveBusinessConfigToSupabase(cfg) {
@@ -33,14 +42,15 @@ async function saveBusinessConfigToSupabase(cfg) {
     const userId = getUserId();
     if (!userId) return false;
 
-    const data = {
+    let data = {
         user_id: userId,
         open_time: cfg.openTime,
         close_time: cfg.closeTime,
         lunch_start: cfg.lunchStart,
         lunch_end: cfg.lunchEnd,
         closed_days: cfg.closedDays,
-        time_format: cfg.timeFormat
+        time_format: cfg.timeFormat,
+        blocked_slots: cfg.blockedSlots || []
     };
 
     // Primero intentar update
@@ -48,6 +58,18 @@ async function saveBusinessConfigToSupabase(cfg) {
         .from('business_config')
         .update(data)
         .eq('user_id', userId);
+
+    if (error) {
+        const m = error.message?.match(/Could not find the '(\w+)' column/i);
+        if (m && m[1] && m[1] in data) {
+            delete data[m[1]];
+            const retry = await window.supabaseClient
+                .from('business_config')
+                .update(data)
+                .eq('user_id', userId);
+            error = retry.error;
+        }
+    }
 
     if (error) {
         // Si falla, es porque no existe, crear
@@ -58,6 +80,11 @@ async function saveBusinessConfigToSupabase(cfg) {
 
     return true;
 }
+
+if (typeof window.saveBusinessConfigToSupabase !== 'function') {
+    window.saveBusinessConfigToSupabase = saveBusinessConfigToSupabase;
+}
+
 
 function getBusinessConfig() {
     // Intentar localStorage primero
@@ -87,17 +114,21 @@ function getBusinessConfigWithSync(callback) {
     const local = getBusinessConfig();
 
     // Luego intentar sincronizar con Supabase
-    loadBusinessConfigFromSupabase().then(cloud => {
-        if (cloud) {
-            // Usar configuración de la nube
-            saveBusinessConfigLocal(cloud);
-            callback(cloud);
-        } else {
-            // Usar local
-            callback(local);
-        }
-    }).catch(() => callback(local));
+    if (typeof loadBusinessConfigFromSupabase === 'function') {
+        loadBusinessConfigFromSupabase().then(cloud => {
+            if (cloud) {
+                // Usar configuración de la nube
+                saveBusinessConfigLocal(cloud);
+                callback(cloud);
+            } else {
+                callback(local);
+            }
+        }).catch(() => callback(local));
+    } else {
+        callback(local);
+    }
 }
+
 
 function saveBusinessConfigBoth(cfg) {
     // Guardar en ambos lugares

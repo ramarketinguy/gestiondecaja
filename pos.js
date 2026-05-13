@@ -172,10 +172,17 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
 });
 
+let _isDataLoading = false;
 async function loadDataFromSupabase() {
+    if (_isDataLoading) {
+        console.log('[SYNC] Carga en progreso, ignorando llamada redundante');
+        return;
+    }
+    _isDataLoading = true;
     const client = window.supabaseClient;
     if(!client) {
         showToast('Extensión de Supabase no detectada', 'error');
+        _isDataLoading = false;
         return;
     }
 
@@ -232,17 +239,41 @@ async function loadDataFromSupabase() {
                 query = query.order(table.order.col, { ascending: table.order.asc });
             }
 
-            const { data, error } = await query;
+            let { data, error } = await query;
+
+            if (error && userId && /user_id/i.test(error.message || '')) {
+                console.warn(`[SYNC] ${table.name} no tiene user_id. Cargando sin filtro de usuario.`);
+                query = client.from(table.name).select('*');
+                if (table.order) {
+                    query = query.order(table.order.col, { ascending: table.order.asc });
+                }
+                const retry = await query;
+                data = retry.data;
+                error = retry.error;
+            }
 
             if (error) {
                 console.warn(`⚠️ Error en ${table.name}:`, error.message);
+                const localRows = getLocalDataSnapshot()[table.stateKey];
+                if (Array.isArray(localRows) && localRows.length > 0) {
+                    db[table.stateKey] = localRows;
+                    state.data = db;
+                    successCount++;
+                    console.warn(`[LOCAL] ${table.name}: usando ${localRows.length} registros de respaldo local.`);
+                }
                 continue;
             }
 
             if (data) {
                 // Usa db desde state.js actualizando ahí
                 db[table.stateKey] = table.transform ? data.map(table.transform) : data;
+                const localRows = getLocalDataSnapshot()[table.stateKey];
+                if (Array.isArray(localRows)) {
+                    const pendingRows = localRows.filter(row => row && row.pendingSync && !db[table.stateKey].some(cloudRow => String(cloudRow.id) === String(row.id)));
+                    if (pendingRows.length > 0) db[table.stateKey] = db[table.stateKey].concat(pendingRows);
+                }
                 state.data = db; // sincroniza alias
+                persistCollectionLocal(table.stateKey, db[table.stateKey]);
                 console.log(`✅ ${table.name}: ${data.length} registros cargados.`);
                 successCount++;
             }
@@ -251,15 +282,83 @@ async function loadDataFromSupabase() {
         }
     }
 
-    if (successCount === 0) {
+    if (successCount > 0) {
+        if (typeof initDashboard === 'function') initDashboard();
+    } else {
         console.error("No se pudo cargar ninguna tabla. Revisa las políticas de RLS en Supabase o si los datos tienen el user_id correcto.");
         showToast('Sin acceso a datos en la nube', 'error');
     }
+    _isDataLoading = false;
 }
 
 // Ya no usamos saveData global porque gestionamos todo en la nube
 async function saveData() {
     console.warn("saveData() global desactivado.");
+}
+
+const LOCAL_DATA_KEY = 'violet_pos_local_data';
+
+function getLocalDataSnapshot() {
+    try {
+        return JSON.parse(localStorage.getItem(LOCAL_DATA_KEY) || '{}');
+    } catch (err) {
+        console.warn('[LOCAL] No se pudo leer respaldo local:', err);
+        return {};
+    }
+}
+
+function saveLocalDataSnapshot(snapshot) {
+    try {
+        localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify(snapshot));
+    } catch (err) {
+        console.warn('[LOCAL] No se pudo guardar respaldo local:', err);
+    }
+}
+
+function persistCollectionLocal(collection, records) {
+    const snapshot = getLocalDataSnapshot();
+    snapshot[collection] = records || [];
+    saveLocalDataSnapshot(snapshot);
+}
+
+function createLocalId(prefix) {
+    return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function isTipTransaction(t) {
+    const detail = (t?.detail || '').toLowerCase();
+    return detail.includes('propina');
+}
+
+function upsertLocalCollectionItem(collection, item) {
+    const arr = Array.isArray(db[collection]) ? db[collection] : [];
+    const idx = arr.findIndex(x => String(x.id) === String(item.id));
+    if (idx >= 0) arr[idx] = item;
+    else arr.push(item);
+    db[collection] = arr;
+    state.data = db;
+    persistCollectionLocal(collection, arr);
+}
+
+function addDaysToDateString(dateStr, days) {
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const date = new Date(year, month - 1, day);
+    date.setDate(date.getDate() + days);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function getAppointmentRepeatDates(firstDate) {
+    const repeat = document.getElementById('apt-repeat')?.value || 'none';
+    if (repeat === 'none' || editingAppointmentId) return [firstDate];
+
+    const count = Math.min(Math.max(parseInt(document.getElementById('apt-repeat-count')?.value, 10) || 1, 1), 52);
+    const days = repeat === 'weekly'
+        ? 7
+        : repeat === 'biweekly'
+            ? 14
+            : Math.min(Math.max(parseInt(document.getElementById('apt-repeat-days')?.value, 10) || 7, 1), 365);
+
+    return Array.from({ length: count }, (_, idx) => addDaysToDateString(firstDate, idx * days));
 }
 
 // Helper reutilizable para subir foto de cliente
@@ -323,28 +422,8 @@ function refreshIcons() {
     setTimeout(() => lucide.createIcons(), 10);
 }
 
-// ==========================================
-// CONFIGURACIÓN DEL NEGOCIO (horarios, días cerrados, formato de hora)
-// ==========================================
-function getBusinessConfig() {
-    const raw = localStorage.getItem('violet_business_config');
-    const defaults = {
-        openTime: '09:00',
-        closeTime: '20:00',
-        lunchStart: '',
-        lunchEnd: '',
-        closedDays: [], // sin días cerrados por defecto
-        timeFormat: '24h',
-        blockedSlots: [] // ej: [{date:'2026-04-21', start:'14:00', end:'16:00', reason:'...'}]
-    };
-    if (!raw) return defaults;
-    try { return { ...defaults, ...JSON.parse(raw) }; }
-    catch { return defaults; }
-}
+// La configuración del negocio ahora se maneja en pos.config.js
 
-function saveBusinessConfig(cfg) {
-    localStorage.setItem('violet_business_config', JSON.stringify(cfg));
-}
 
 // Devuelve array de strings con los problemas que tiene el turno propuesto
 function checkAppointmentConflicts(dateStr, timeStr, employeeId = null) {
@@ -590,197 +669,8 @@ function initCustomSelects() {
     });
 }
 
-// ==========================================
-// 5. PENDIENTES (Dashboard Diario)
-// ==========================================
-function renderDashboardCumpleanos() {
-    const list = document.getElementById('widget-birthdays');
-    if (!list) return;
-    list.innerHTML = '';
+// Las funciones de renderizado del dashboard se han movido a pos.dashboard.js
 
-    // Verificar datos
-    const clients = db?.clients || [];
-    if (clients.length === 0) {
-        list.innerHTML = '<span style="color:var(--text-dim);font-size:0.85rem">Sin clientes aún. ¡Agregá el primero!</span>';
-        return;
-    }
-    const today = new Date();
-    
-    const upcoming = db.clients.filter(c => {
-        if (!c.birthday) return false;
-        // Parse "YYYY-MM-DD" but ignore Year for comparison
-        const [y, m, d] = c.birthday.split('-');
-        const bDate = new Date(today.getFullYear(), parseInt(m)-1, parseInt(d));
-        // Ajuste si ya pasó el cumple este año, mirar al próximo
-        if (bDate < new Date(today.getFullYear(), today.getMonth(), today.getDate())) {
-            bDate.setFullYear(today.getFullYear() + 1);
-        }
-        const diffTime = Math.abs(bDate - today);
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        return diffDays <= 7;
-    });
-
-    if (upcoming.length === 0) {
-        list.innerHTML = `<span style="color:var(--text-dim);font-size:0.85rem">No hay cumpleaños en próximos 7 días.</span>`;
-        return;
-    }
-
-    upcoming.forEach(c => {
-        list.innerHTML += `
-            <div class="widget-list-item">
-                <div class="info">
-                    <span class="main-text">${c.name}</span>
-                    <span class="sub-text"><i data-lucide="phone" style="width:12px;height:12px;vertical-align:middle"></i> ${c.phone || '-'}</span>
-                </div>
-                <div class="badge badge-border" style="color:var(--violet-200); border-color:var(--violet-400)">${c.birthday ? c.birthday.slice(8,10)+'/'+c.birthday.slice(5,7) : ''}</div>
-            </div>
-        `;
-    });
-    refreshIcons();
-}
-
-function renderDashboardTareas() {
-    const tasksContainer = document.getElementById('task-list');
-    const inputRow = document.getElementById('task-input-container');
-    const input = document.getElementById('new-task-input');
-    
-    document.getElementById('btn-add-task').onclick = () => {
-        inputRow.classList.toggle('hidden');
-        if(!inputRow.classList.contains('hidden')) input.focus();
-    };
-
-    input.onkeypress = async (e) => {
-        if(e.key === 'Enter' && input.value.trim()) {
-            const taskText = input.value.trim();
-            input.value = '';
-            input.disabled = true;
-            const { data, error } = await window.supabaseClient.from('tasks').insert([{ 
-                text: taskText, 
-                completed: false 
-            }]).select();
-            input.disabled = false;
-            if(data) {
-                db.tasks.push(data[0]);
-                renderDashboardTareas();
-            } else {
-                showToast('Error al crear tarea', 'error');
-            }
-        }
-    };
-
-    tasksContainer.innerHTML = '';
-    
-    if (db.tasks.length === 0) {
-        tasksContainer.innerHTML = `<span style="color:var(--text-dim);font-size:0.85rem">Todo al día.</span>`;
-        return;
-    }
-
-    db.tasks.forEach((t, index) => {
-        const li = document.createElement('li');
-        li.className = `task-item ${t.completed ? 'completed' : ''}`;
-        li.innerHTML = `
-            <input type="checkbox" class="task-checkbox" ${t.completed ? 'checked' : ''} data-id="${t.id}">
-            <span class="task-text">${t.text}</span>
-            <button class="btn-icon btn-sm task-del" data-id="${t.id}" style="padding:0;color:var(--danger)"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
-        `;
-        tasksContainer.appendChild(li);
-    });
-
-    // Events
-    document.querySelectorAll('.task-checkbox').forEach(cb => {
-        cb.onchange = async (e) => {
-            const id = e.target.getAttribute('data-id');
-            const task = db.tasks.find(x => x.id == id);
-            if(task) {
-                task.completed = e.target.checked;
-                await window.supabaseClient.from('tasks').update({ completed: task.completed }).eq('id', id);
-                renderDashboardTareas();
-            }
-        };
-    });
-
-    document.querySelectorAll('.task-del').forEach(btn => {
-        btn.onclick = async (e) => {
-            const id = e.currentTarget.getAttribute('data-id');
-            db.tasks = db.tasks.filter(x => x.id != id);
-            await window.supabaseClient.from('tasks').delete().eq('id', id);
-            renderDashboardTareas();
-        }
-    });
-
-    refreshIcons();
-}
-
-function renderDashboardDeudas() {
-    const list = document.getElementById('widget-debts');
-    list.innerHTML = '';
-    const inDebt = db.clients.filter(c => c.debt && c.debt > 0);
-    
-    if (inDebt.length === 0) {
-        list.innerHTML = `<span style="color:var(--text-dim);font-size:0.85rem">No existen cuentas por cobrar. ¡Excelente!</span>`;
-        return;
-    }
-
-    const totalDeuda = inDebt.reduce((s, c) => s + parseFloat(c.debt || 0), 0);
-    const fmt = n => Number(n).toLocaleString('es-UY');
-
-    // Encabezado con total
-    list.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:rgba(248,113,113,0.08);border-radius:var(--radius-sm);margin-bottom:4px;border:1px solid rgba(248,113,113,0.2);">
-        <span style="font-size:0.8rem;color:var(--text-dim);">${inDebt.length} clientas deben</span>
-        <span style="font-weight:800;color:var(--danger);font-size:1rem;">Total: $${fmt(totalDeuda)}</span>
-    </div>`;
-
-    inDebt.forEach(c => {
-        // Buscar la transacción más antigua con deuda de esta clienta
-        const debtTx = db.transactions
-            .filter(t => t.clientId == c.id && t.isIncome && /deuda/i.test(t.detail))
-            .sort((a, b) => new Date(a.date) - new Date(b.date))[0];
-        const debtDate = debtTx ? new Date(debtTx.date).toLocaleDateString('es-UY', {day:'2-digit', month:'2-digit', year:'numeric'}) : '';
-        const debtSubtext = debtDate ? `desde el ${debtDate}` : `<i data-lucide="phone" style="width:12px;height:12px;vertical-align:middle"></i> ${c.phone || '-'}`;
-
-        list.innerHTML += `
-            <div class="widget-list-item" style="cursor:pointer;" onclick="openClientModal('${c.id}')">
-                <div class="info">
-                    <span class="main-text">${c.name}</span>
-                    <span class="sub-text">${debtSubtext}</span>
-                </div>
-                <div style="display:flex;align-items:center;gap:8px;">
-                    <div style="color:var(--danger); font-weight:700;">$${fmt(c.debt)}</div>
-                    <i data-lucide="chevron-right" style="width:14px;height:14px;color:var(--text-dim)"></i>
-                </div>
-            </div>
-        `;
-    });
-    refreshIcons();
-}
-
-function renderDashboardAgendaResumen() {
-    const list = document.getElementById('widget-agenda');
-    list.innerHTML = '';
-    
-    // Obtener fecha YYYY-MM-DD
-    const todayLocal = new Date();
-    const todayStr = `${todayLocal.getFullYear()}-${String(todayLocal.getMonth()+1).padStart(2,'0')}-${String(todayLocal.getDate()).padStart(2,'0')}`;
-    
-    const todaysApts = db.appointments.filter(a => a.date === todayStr).sort((a,b) => (a.time || '').localeCompare(b.time || ''));
-
-    if (todaysApts.length === 0) {
-        list.innerHTML = `<span style="color:var(--text-dim);font-size:0.85rem;text-align:center;display:block;margin-top:20px;">No hay reservaciones agendadas para hoy.</span>`;
-        return;
-    }
-
-    todaysApts.forEach(apt => {
-        list.innerHTML += `
-            <div class="widget-list-item" style="border-left: 3px solid var(--gold-400);">
-                <div style="font-weight:700; color:var(--gold-400); min-width:70px; margin-right: 10px;">${apt.time}</div>
-                <div class="info" style="flex:1;">
-                    <span class="main-text">${apt.clientName}</span>
-                    <span class="sub-text" style="color:var(--violet-200)">${apt.service || 'Visita'}</span>
-                </div>
-            </div>
-        `;
-    });
-}
 
 // ==========================================
 // 6. AGENDA (CALENDARIO)
@@ -881,6 +771,14 @@ function initAgenda() {
             e.preventDefault();
             saveAppointment();
         };
+
+        const repeatSelect = document.getElementById('apt-repeat');
+        const repeatCustomWrap = document.getElementById('apt-repeat-custom-wrap');
+        if (repeatSelect && repeatCustomWrap) {
+            repeatSelect.addEventListener('change', () => {
+                repeatCustomWrap.classList.toggle('hidden', repeatSelect.value !== 'custom');
+            });
+        }
     }
 
     renderAgenda(todayStr);
@@ -917,6 +815,10 @@ function openAgendarModal(preselectedDate = null, preselectedTime = null) {
         aptSel.value = '';
         syncCustomSelect('apt-service');
     }
+    const repeatSel = document.getElementById('apt-repeat');
+    if (repeatSel) { repeatSel.value = 'none'; syncCustomSelect('apt-repeat'); }
+    const repeatCustom = document.getElementById('apt-repeat-custom-wrap');
+    if (repeatCustom) repeatCustom.classList.add('hidden');
 }
 function closeAgendarModal() {
     document.getElementById('modal-appointment').classList.remove('open');
@@ -1099,6 +1001,7 @@ async function saveAppointment() {
         employee_id: aptEmployeeId,
         user_id: getUserId()
     };
+    const repeatDates = getAppointmentRepeatDates(dateInput);
 
     showToast('Guardando cita...', 'info');
     let res;
@@ -1118,7 +1021,28 @@ async function saveAppointment() {
                 }
             }
         } else {
-            res = await insertAppointmentSafe(aptData);
+            const savedRows = [];
+            let firstError = null;
+            for (const repeatDate of repeatDates) {
+                const row = { ...aptData, apt_date: repeatDate };
+                const insertRes = await insertAppointmentSafe(row);
+                if (insertRes.error || !insertRes.data || !insertRes.data[0]) {
+                    firstError = insertRes.error || { message: 'No se pudo guardar en Supabase' };
+                    savedRows.push({
+                        ...row,
+                        id: createLocalId('apt'),
+                        date: row.apt_date,
+                        time: row.apt_time,
+                        clientId: row.client_id,
+                        clientName: row.client_name,
+                        employeeId: row.employee_id,
+                        pendingSync: true
+                    });
+                } else {
+                    savedRows.push(insertRes.data[0]);
+                }
+            }
+            res = { data: savedRows, error: firstError && savedRows.length === 0 ? firstError : null };
         }
     } catch (e) {
         console.error('[Cita] Excepción:', e);
@@ -1127,24 +1051,34 @@ async function saveAppointment() {
     }
 
     if (!res.error && res.data) {
-        const raw = res.data[0];
+        const savedAppointments = res.data.map(raw => ({
+            ...raw,
+            date: raw.apt_date || raw.date,
+            time: raw.apt_time || raw.time,
+            clientId: raw.client_id || raw.clientId,
+            clientName: raw.client_name || raw.clientName,
+            serviceId: raw.service_id || raw.serviceId,
+            employeeId: raw.employee_id || raw.employeeId
+        }));
+        const raw = savedAppointments[0];
         // Apply same transform as loadDataFromSupabase so mapped fields (date, time, clientId, etc.) exist
         const apt = {
             ...raw,
-            date: raw.apt_date,
-            time: raw.apt_time,
-            clientId: raw.client_id,
-            clientName: raw.client_name,
-            serviceId: raw.service_id,
-            employeeId: raw.employee_id
+            date: raw.date,
+            time: raw.time,
+            clientId: raw.clientId,
+            clientName: raw.clientName,
+            serviceId: raw.serviceId,
+            employeeId: raw.employeeId
         };
         if (editingAppointmentId) {
             const idx = db.appointments.findIndex(a => a.id == editingAppointmentId);
             if (idx >= 0) db.appointments[idx] = apt;
         } else {
-            db.appointments.push(apt);
+            savedAppointments.forEach(item => db.appointments.push(item));
         }
         showToast('Cita guardada con éxito');
+        persistCollectionLocal('appointments', db.appointments);
         closeAgendarModal();
         renderAgenda(dateInput);
         renderAgendaSidePanel(dateInput);
@@ -2014,6 +1948,13 @@ async function saveTransaction() {
         const splitAmt = parseFloat(document.getElementById('split-amount').value);
         const splitMet = document.getElementById('split-method').value;
         if (!isNaN(splitAmt) && splitAmt > 0) {
+            if (splitAmt >= transactionSchema.amount) {
+                showToast('El segundo pago debe ser menor al total del servicio.', 'error');
+                document.getElementById('btn-save-transaction').disabled = false;
+                return;
+            }
+            transactionSchema.amount = transactionSchema.amount - splitAmt;
+            transactionSchema.detail += ` (pago principal de total $${amount})`;
             split2 = { 
                 ...transactionSchema, 
                 amount: splitAmt, 
@@ -2058,6 +1999,7 @@ async function saveTransaction() {
                 clientId: t.client_id, detail: t.detail, method: t.method, employee: t.employee
             });
         });
+        persistCollectionLocal('transactions', db.transactions);
 
         // Manejar propina en la empleada si se guardó
         if (tipTx) {
@@ -2067,6 +2009,7 @@ async function saveTransaction() {
                 const newTips = (parseFloat(emp.tips) || 0) + tipAmt;
                 const { error: empErr } = await window.supabaseClient.from('employees').update({ tips: newTips }).eq('id', emp.id);
                 if (!empErr) emp.tips = newTips;
+                persistCollectionLocal('employees', db.employees);
             }
         }
 
@@ -2109,7 +2052,23 @@ async function saveTransaction() {
         showToast('Movimiento registrado en caja.');
     } else {
         console.error(error);
-        showToast('Error de registro en caja.', 'error');
+        const localRows = inserts.map(tx => ({
+            id: createLocalId('tx'),
+            date: tx.transaction_date,
+            isIncome: tx.is_income,
+            amount: parseFloat(tx.amount),
+            clientName: tx.client_name,
+            clientId: tx.client_id,
+            detail: tx.detail,
+            method: tx.method,
+            employee: tx.employee,
+            pendingSync: true
+        }));
+        localRows.forEach(tx => db.transactions.push(tx));
+        persistCollectionLocal('transactions', db.transactions);
+        updateStats();
+        renderTransactionsTable();
+        showToast('Movimiento guardado localmente. Revisá Supabase para sincronización.', 'warning');
     }
 }
 
@@ -2117,7 +2076,7 @@ function updateStats() {
     const today = new Date().toLocaleDateString();
     let cache = { ef:0, tr:0, de:0, tot:0 };
 
-    db.transactions.filter(t => isSameDay(t.date, new Date())).forEach(t => {
+    db.transactions.filter(t => isSameDay(t.date, new Date()) && !isTipTransaction(t)).forEach(t => {
         if (t.isIncome) {
             if (t.method === 'efectivo') cache.ef += t.amount;
             else if (t.method === 'transferencia') cache.tr += t.amount;
@@ -2398,7 +2357,7 @@ function openCashClosureModal() {
     const today = new Date();
     let cache = { ef:0, digital:0, se:0, egresos:0, tot:0 };
 
-    const todays = db.transactions.filter(t => isSameDay(t.date, today));
+    const todays = db.transactions.filter(t => isSameDay(t.date, today) && !isTipTransaction(t));
     
     todays.forEach(t => {
         if (t.isIncome) {
@@ -2455,7 +2414,7 @@ async function saveCashClosure() {
     const today = new Date();
     let cache = { ef:0, digital:0, se:0, egresos:0 };
 
-    db.transactions.filter(t => isSameDay(t.date, today)).forEach(t => {
+    db.transactions.filter(t => isSameDay(t.date, today) && !isTipTransaction(t)).forEach(t => {
         if (t.isIncome) {
             if (t.method === 'efectivo') cache.ef += t.amount;
             else if (t.method === 'seña') cache.se += t.amount;
@@ -2480,21 +2439,42 @@ async function saveCashClosure() {
 
     showToast('Guardando cierre...', 'info');
     try {
-        const { data, error } = await window.supabaseClient.from('closures').insert([closureData]).select();
+        let { data, error } = await window.supabaseClient.from('closures').insert([closureData]).select();
+        if (error && error.message) {
+            const m = error.message.match(/Could not find the '(\w+)' column/i);
+            if (m && m[1] && m[1] in closureData) {
+                const cleanClosure = { ...closureData };
+                delete cleanClosure[m[1]];
+                const retry = await window.supabaseClient.from('closures').insert([cleanClosure]).select();
+                data = retry.data;
+                error = retry.error;
+            }
+        }
 
         if (!error && data) {
             db.closures.unshift(data[0]);
+            persistCollectionLocal('closures', db.closures);
             renderClosuresHistory();
             const m = document.getElementById('modal-closure') || document.getElementById('modal-cierre-caja');
             if (m) m.classList.remove('open');
             showToast('Cierre de caja guardado con éxito.', 'success');
         } else {
             console.error('[Cierre] Error Supabase:', error);
-            showToast('Error al guardar cierre: ' + (error?.message || 'ver consola'), 'error');
+            db.closures.unshift({ ...closureData, id: createLocalId('closure'), pendingSync: true });
+            persistCollectionLocal('closures', db.closures);
+            renderClosuresHistory();
+            const m = document.getElementById('modal-closure') || document.getElementById('modal-cierre-caja');
+            if (m) m.classList.remove('open');
+            showToast('Cierre guardado localmente. Revisá Supabase para sincronización.', 'warning');
         }
     } catch(e) {
         console.error(e);
-        showToast('Error de red al guardar cierre.', 'error');
+        db.closures.unshift({ ...closureData, id: createLocalId('closure'), pendingSync: true });
+        persistCollectionLocal('closures', db.closures);
+        renderClosuresHistory();
+        const m = document.getElementById('modal-closure') || document.getElementById('modal-cierre-caja');
+        if (m) m.classList.remove('open');
+        showToast('Cierre guardado localmente. Revisá Supabase para sincronización.', 'warning');
     }
 }
 
@@ -2762,12 +2742,14 @@ async function createClient(name, phone = '') {
     const { data, error } = await insertClientSafe(newClientData);
     if (data && data[0]) {
         db.clients.push(data[0]);
+        persistCollectionLocal('clients', db.clients);
         return data[0];
     }
     console.error('Error creando cliente:', error);
     // Fallback local si Supabase falla
-    const fallback = { id: 'cl_' + Date.now(), ...newClientData };
+    const fallback = { id: createLocalId('client'), ...newClientData, pendingSync: true };
     db.clients.push(fallback);
+    persistCollectionLocal('clients', db.clients);
     return fallback;
 }
 
