@@ -24,9 +24,8 @@ async function loadBusinessConfigFromSupabase() {
     return {
         openTime: data.open_time,
         closeTime: data.close_time,
-        lunchStart: data.lunch_start,
-        lunchEnd: data.lunch_end,
         closedDays: data.closed_days || [],
+        weeklyHours: data.weekly_hours || null,
         timeFormat: data.time_format || '24h',
         blockedSlots: data.blocked_slots || []
     };
@@ -46,18 +45,15 @@ async function saveBusinessConfigToSupabase(cfg) {
         user_id: userId,
         open_time: cfg.openTime,
         close_time: cfg.closeTime,
-        lunch_start: cfg.lunchStart,
-        lunch_end: cfg.lunchEnd,
         closed_days: cfg.closedDays,
+        weekly_hours: cfg.weeklyHours || null,
         time_format: cfg.timeFormat,
         blocked_slots: cfg.blockedSlots || []
     };
 
-    // Primero intentar update
     let { error } = await window.supabaseClient
         .from('business_config')
-        .update(data)
-        .eq('user_id', userId);
+        .upsert([data], { onConflict: 'user_id' });
 
     if (error) {
         const m = error.message?.match(/Could not find the '(\w+)' column/i);
@@ -65,20 +61,13 @@ async function saveBusinessConfigToSupabase(cfg) {
             delete data[m[1]];
             const retry = await window.supabaseClient
                 .from('business_config')
-                .update(data)
-                .eq('user_id', userId);
+                .upsert([data], { onConflict: 'user_id' });
             error = retry.error;
         }
     }
 
-    if (error) {
-        // Si falla, es porque no existe, crear
-        if (error.message.includes('0 rows')) {
-            await window.supabaseClient.from('business_config').insert([data]);
-        }
-    }
-
-    return true;
+    if (error) console.warn('[CONFIG] No se pudo guardar en Supabase:', error.message);
+    return !error;
 }
 
 if (typeof window.saveBusinessConfigToSupabase !== 'function') {
@@ -90,8 +79,8 @@ function getBusinessConfig() {
     // Intentar localStorage primero
     const raw = localStorage.getItem('violet_business_config');
     const defaults = {
-        openTime: '09:00', closeTime: '20:00', lunchStart: '', lunchEnd: '',
-        closedDays: [], timeFormat: '24h', blockedSlots: []
+        openTime: '09:00', closeTime: '20:00',
+        closedDays: [], weeklyHours: null, timeFormat: '24h', blockedSlots: []
     };
 
     if (raw) {

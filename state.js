@@ -40,9 +40,8 @@ const state = {
     config: {
         openTime: '09:00',
         closeTime: '20:00',
-        lunchStart: '',
-        lunchEnd: '',
         closedDays: [],
+        weeklyHours: null,
         timeFormat: '24h',
         blockedSlots: []
     }

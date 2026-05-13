@@ -20,7 +20,7 @@
     <!-- Supabase -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     
-    <link rel="stylesheet" href="pos.css?v=202605131630">
+    <link rel="stylesheet" href="pos.css?v=202605131745">
 </head>
 <body>
 
@@ -769,20 +769,16 @@
                                 <label>Horario de cierre</label>
                                 <div class="input-wrap"><i data-lucide="sunset"></i><select id="cfg-close-time" class="custom-select time-select"></select></div>
                             </div>
-                            <div class="form-group">
-                                <label>Inicio de almuerzo (opcional)</label>
-                                <div class="input-wrap"><i data-lucide="coffee"></i><select id="cfg-lunch-start" class="custom-select time-select"><option value="">Ninguno</option></select></div>
-                            </div>
-                            <div class="form-group">
-                                <label>Fin de almuerzo (opcional)</label>
-                                <div class="input-wrap"><i data-lucide="coffee"></i><select id="cfg-lunch-end" class="custom-select time-select"><option value="">Ninguno</option></select></div>
-                            </div>
                         </div>
                         <div class="form-group" style="margin-top:1rem;">
                             <label>Días cerrados</label>
                             <div id="cfg-closed-days" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;">
                                 <!-- Poblado por JS con checkboxes -->
                             </div>
+                        </div>
+                        <div class="form-group" style="margin-top:1rem;">
+                            <label>Horarios por dÃ­a</label>
+                            <div id="cfg-weekly-hours" class="weekly-hours-grid"></div>
                         </div>
                         <div class="form-group" style="margin-top:1rem;">
                             <label>Formato de hora</label>
@@ -901,7 +897,7 @@
                             <label>Cantidad de citas</label>
                             <div class="input-wrap">
                                 <i data-lucide="calendar-plus"></i>
-                                <input type="number" id="apt-repeat-count" min="2" max="52" value="4">
+                            <input type="number" id="apt-repeat-count" min="2" max="52" placeholder="Solo si se repite" disabled>
                             </div>
                         </div>
                     </div>
@@ -1384,15 +1380,15 @@
 
     <!-- Scripts del Sistema -->
     <script src="config.js?v=202604260900"></script>
-    <script src="state.js?v=202604260900"></script>
+    <script src="state.js?v=202605131745"></script>
     <script src="validation.js?v=202604260900"></script>
     <script src="auth.js?v=202604260900"></script>
     <script src="supabase-helpers.js?v=202604260900"></script>
     <script src="clients.js?v=202604260900"></script>
-    <script src="pos.js?v=202605131630"></script>
+    <script src="pos.js?v=202605131745"></script>
     <script src="pos.dashboard.js?v=202605131630"></script>
     <script src="pos.services.js?v=202604260900"></script>
-    <script src="pos.config.js?v=202604260900"></script>
+    <script src="pos.config.js?v=202605131745"></script>
     <!-- Modal: Cierre de Caja (Formulario) -->
     <div class="modal-overlay" id="modal-closure">
         <div class="modal" style="max-width: 480px;">

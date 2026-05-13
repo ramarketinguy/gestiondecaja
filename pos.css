@@ -113,6 +113,9 @@ body::before {
 .staff-metrics { display: flex; gap: .6rem; flex-wrap: wrap; justify-content: flex-end; color: var(--text-dim); font-size: .8rem; }
 .staff-metrics span { background: rgba(255,255,255,.04); border: 1px solid var(--border-subtle); border-radius: 999px; padding: .3rem .6rem; }
 .staff-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .9rem; }
+.weekly-hours-grid { display: grid; gap: .7rem; margin-top: .7rem; }
+.weekly-hours-row { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: .7rem; align-items: center; padding: .7rem; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: rgba(0,0,0,.14); }
+.weekly-day { display: flex; align-items: center; gap: .45rem; color: var(--text-secondary); font-size: .86rem; }
 
 /* List styles for widgets */
 .widget-list-item { display: flex; align-items: center; justify-content: space-between; padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); background: var(--bg-input); }

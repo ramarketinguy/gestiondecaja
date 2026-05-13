@@ -285,6 +285,14 @@ async function loadDataFromSupabase() {
                 error = retry.error;
             }
 
+            if (!error && userId && Array.isArray(data) && data.length === 0 && ['clients', 'services', 'employees', 'appointments', 'transactions', 'tasks'].includes(table.name)) {
+                console.warn(`[SYNC] ${table.name}: sin filas con user_id. Reintentando lectura legacy sin filtro.`);
+                let legacyQuery = client.from(table.name).select('*');
+                if (table.order) legacyQuery = legacyQuery.order(table.order.col, { ascending: table.order.asc });
+                const legacy = await legacyQuery;
+                if (!legacy.error && Array.isArray(legacy.data) && legacy.data.length > 0) data = legacy.data;
+            }
+
             if (error) {
                 console.warn(`⚠️ Error en ${table.name}:`, error.message);
                 const localRows = getLocalDataSnapshot()[table.stateKey];
@@ -301,10 +309,7 @@ async function loadDataFromSupabase() {
                 // Usa db desde state.js actualizando ahí
                 db[table.stateKey] = table.transform ? data.map(table.transform) : data;
                 const localRows = getLocalDataSnapshot()[table.stateKey];
-                if (Array.isArray(localRows)) {
-                    const pendingRows = localRows.filter(row => row && row.pendingSync && !db[table.stateKey].some(cloudRow => String(cloudRow.id) === String(row.id)));
-                    if (pendingRows.length > 0) db[table.stateKey] = db[table.stateKey].concat(pendingRows);
-                }
+                db[table.stateKey] = mergeCloudAndLocalRows(db[table.stateKey], localRows);
                 state.data = db; // sincroniza alias
                 persistCollectionLocal(table.stateKey, db[table.stateKey]);
                 console.log(`✅ ${table.name}: ${data.length} registros cargados.`);
@@ -352,6 +357,17 @@ function persistCollectionLocal(collection, records) {
     const snapshot = getLocalDataSnapshot();
     snapshot[collection] = records || [];
     saveLocalDataSnapshot(snapshot);
+}
+
+function mergeCloudAndLocalRows(cloudRows, localRows) {
+    const merged = Array.isArray(cloudRows) ? [...cloudRows] : [];
+    if (!Array.isArray(localRows)) return merged;
+    localRows.forEach(localRow => {
+        if (!localRow || localRow.deleted) return;
+        const exists = merged.some(cloudRow => String(cloudRow.id) === String(localRow.id));
+        if (!exists) merged.push(localRow);
+    });
+    return merged;
 }
 
 function createLocalId(prefix) {
@@ -455,12 +471,28 @@ function refreshIcons() {
     setTimeout(() => lucide.createIcons(), 10);
 }
 
+function getBusinessHoursForDate(dateStr) {
+    const cfg = getBusinessConfig();
+    const [y, m, d] = (dateStr || '').split('-').map(n => parseInt(n));
+    const dateObj = new Date(y, (m || 1) - 1, d || 1);
+    const dow = dateObj.getDay();
+    const dayCfg = cfg.weeklyHours && cfg.weeklyHours[String(dow)];
+    const closed = Boolean(dayCfg?.closed) || (cfg.closedDays || []).includes(dow);
+    return {
+        dow,
+        closed,
+        openTime: dayCfg?.open || cfg.openTime || '09:00',
+        closeTime: dayCfg?.close || cfg.closeTime || '20:00'
+    };
+}
+
 // La configuración del negocio ahora se maneja en pos.config.js
 
 
 // Devuelve array de strings con los problemas que tiene el turno propuesto
 function checkAppointmentConflicts(dateStr, timeStr, employeeId = null) {
     const cfg = getBusinessConfig();
+    const hours = getBusinessHoursForDate(dateStr);
     const warnings = [];
     if (!dateStr || !timeStr) return warnings;
 
@@ -469,21 +501,16 @@ function checkAppointmentConflicts(dateStr, timeStr, employeeId = null) {
     const dateObj = new Date(y, m - 1, d);
     const dow = dateObj.getDay(); // 0=Dom, 6=Sab
     const dayNames = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
-    if (cfg.closedDays && cfg.closedDays.includes(dow)) {
+    if (hours.closed) {
         warnings.push(`El negocio está cerrado los ${dayNames[dow]}.`);
     }
 
     // Fuera de horario
-    if (cfg.openTime && timeStr < cfg.openTime) {
-        warnings.push(`El horario de apertura es ${cfg.openTime}.`);
+    if (hours.openTime && timeStr < hours.openTime) {
+        warnings.push(`El horario de apertura es ${hours.openTime}.`);
     }
-    if (cfg.closeTime && timeStr >= cfg.closeTime) {
-        warnings.push(`El horario de cierre es ${cfg.closeTime}.`);
-    }
-
-    // Horario de almuerzo
-    if (cfg.lunchStart && cfg.lunchEnd && timeStr >= cfg.lunchStart && timeStr < cfg.lunchEnd) {
-        warnings.push(`Horario de almuerzo (${cfg.lunchStart} - ${cfg.lunchEnd}).`);
+    if (hours.closeTime && timeStr >= hours.closeTime) {
+        warnings.push(`El horario de cierre es ${hours.closeTime}.`);
     }
 
     // Turnos bloqueados — filtrar por scope (general o empleada específica)
@@ -824,9 +851,15 @@ function initAgenda() {
 
         const repeatSelect = document.getElementById('apt-repeat');
         const repeatCustomWrap = document.getElementById('apt-repeat-custom-wrap');
+        const repeatCountInput = document.getElementById('apt-repeat-count');
         if (repeatSelect && repeatCustomWrap) {
             repeatSelect.addEventListener('change', () => {
+                const repeats = repeatSelect.value !== 'none';
                 repeatCustomWrap.classList.toggle('hidden', repeatSelect.value !== 'custom');
+                if (repeatCountInput) {
+                    repeatCountInput.disabled = !repeats;
+                    repeatCountInput.value = repeats ? (repeatCountInput.value || '4') : '';
+                }
             });
         }
     }
@@ -867,6 +900,8 @@ function openAgendarModal(preselectedDate = null, preselectedTime = null) {
     }
     const repeatSel = document.getElementById('apt-repeat');
     if (repeatSel) { repeatSel.value = 'none'; syncCustomSelect('apt-repeat'); }
+    const repeatCount = document.getElementById('apt-repeat-count');
+    if (repeatCount) { repeatCount.value = ''; repeatCount.disabled = true; }
     const repeatCustom = document.getElementById('apt-repeat-custom-wrap');
     if (repeatCustom) repeatCustom.classList.add('hidden');
 }
@@ -1174,7 +1209,7 @@ function renderAgendaMonth() {
         const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
         const dayDate = new Date(year, month, d);
         const dow = dayDate.getDay();
-        const isClosed = (cfg.closedDays || []).includes(dow);
+        const isClosed = getBusinessHoursForDate(dateStr).closed;
         const apts = db.appointments.filter(a => getAppointmentDate(a) === dateStr);
         const birthdays = db.clients.filter(c => {
             if (!c.birthday) return false;
@@ -1238,7 +1273,8 @@ function renderAgendaSidePanel(dateStr) {
 
     let html = `<div style="font-weight:700;font-size:1rem;margin-bottom:.8rem;">${dayNames[dow]} ${d} ${monthNames[m-1]}</div>`;
 
-    const isClosed = (cfg.closedDays || []).includes(dow);
+    const dayHours = getBusinessHoursForDate(dateStr);
+    const isClosed = dayHours.closed;
     if (isClosed) {
         html += `<div class="badge badge-border" style="color:var(--danger);border-color:var(--danger);margin-bottom:.8rem;">Negocio cerrado este día</div>`;
     }
@@ -1269,14 +1305,12 @@ function renderAgendaSidePanel(dateStr) {
     }
 
     // Horarios disponibles (slots libres) — clickeable para agendar rápido
-    if (!isClosed && cfg.openTime && cfg.closeTime) {
+    if (!isClosed && dayHours.openTime && dayHours.closeTime) {
         const slots = [];
         const toMin = t => { const [h, mn] = t.split(':').map(n => parseInt(n)); return h*60 + mn; };
         const toStr = mm => `${String(Math.floor(mm/60)).padStart(2,'0')}:${String(mm%60).padStart(2,'0')}`;
-        const start = toMin(cfg.openTime);
-        const end = toMin(cfg.closeTime);
-        const lunchS = cfg.lunchStart ? toMin(cfg.lunchStart) : null;
-        const lunchE = cfg.lunchEnd ? toMin(cfg.lunchEnd) : null;
+        const start = toMin(dayHours.openTime);
+        const end = toMin(dayHours.closeTime);
         const blocks = (cfg.blockedSlots || []).filter(b => b.date === dateStr);
         // Reserva temporal en curso
         const tempRes = (window.tempSlotReservation && window.tempSlotReservation.date === dateStr) ? window.tempSlotReservation.time : null;
@@ -1286,7 +1320,6 @@ function renderAgendaSidePanel(dateStr) {
         const maxConcurrent = activeEmps.length > 0 ? activeEmps.length : 1;
 
         for (let t = start; t < end; t += 30) {
-            const inLunch = (lunchS !== null && t >= lunchS && t < lunchE);
             const inBlock = blocks.some(b => t >= toMin(b.start) && t < toMin(b.end));
             const ts = toStr(t);
             const tempTaken = tempRes === ts;
@@ -1308,7 +1341,7 @@ function renderAgendaSidePanel(dateStr) {
                 }
             });
 
-            if (!inLunch && !inBlock && !tempTaken && !isPastDate) {
+            if (!inBlock && !tempTaken && !isPastDate) {
                 if (totalBusyCount < maxConcurrent) {
                     let bgColor = 'rgba(52,211,153,0.12)';
                     let borderColor = 'rgba(52,211,153,0.3)';
@@ -2291,7 +2324,7 @@ function renderTransactionsTable() {
     tbody.innerHTML += `
         <tr style="border-top:2px solid var(--border-subtle); background:rgba(0,0,0,0.2);">
             <td colspan="4" style="font-weight:700; font-size:0.85rem; color:var(--text-secondary);">
-                ${todays.length} movimientos
+                ${Object.keys(grouped).length} movimiento${Object.keys(grouped).length === 1 ? '' : 's'}
                 ${totalEgreso > 0 ? `<span style="color:var(--danger);margin-left:12px;">Egresos: -$${fmt(totalEgreso)}</span>` : ''}
             </td>
             <td style="font-weight:700; color:var(--text-secondary); text-align:right; font-size:0.8rem;">TOTAL</td>
@@ -3411,6 +3444,8 @@ function initSettings() {
     // Estos renders se ejecutan siempre para refrescar los datos
     renderServicesList();
     renderEmployeesList();
+    updateFormSelects();
+    if (typeof renderStaffPanel === 'function') renderStaffPanel();
     initBusinessConfigUI();
 }
 
@@ -3423,16 +3458,15 @@ function initBusinessConfigUI() {
     // — Valores actuales en los selects —
     openEl.value = cfg.openTime || '';
     document.getElementById('cfg-close-time').value = cfg.closeTime || '';
-    document.getElementById('cfg-lunch-start').value = cfg.lunchStart || '';
-    document.getElementById('cfg-lunch-end').value = cfg.lunchEnd || '';
     document.getElementById('cfg-time-format').value = cfg.timeFormat || '24h';
 
     // Sincronizar los custom selects de hora con los valores cargados
-    ['cfg-open-time', 'cfg-close-time', 'cfg-lunch-start', 'cfg-lunch-end'].forEach(id => syncCustomSelect(id));
+    ['cfg-open-time', 'cfg-close-time'].forEach(id => syncCustomSelect(id));
     syncCustomSelect('cfg-time-format');
 
     // Días de la semana (siempre se re-renderizan)
     const daysContainer = document.getElementById('cfg-closed-days');
+    if (daysContainer) daysContainer.closest('.form-group').style.display = 'none';
     const dayNames = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
     daysContainer.innerHTML = '';
     dayNames.forEach((name, idx) => {
@@ -3445,6 +3479,34 @@ function initBusinessConfigUI() {
         });
         daysContainer.appendChild(lbl);
     });
+
+    const weeklyContainer = document.getElementById('cfg-weekly-hours');
+    if (weeklyContainer) {
+        let timeOptions = '';
+        for (let h = 0; h < 24; h++) {
+            for (let m = 0; m < 60; m += 30) {
+                const value = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                timeOptions += `<option value="${value}">${value}</option>`;
+            }
+        }
+        weeklyContainer.innerHTML = '';
+        dayNames.forEach((name, idx) => {
+            const dayCfg = cfg.weeklyHours?.[String(idx)] || {};
+            const isClosed = Boolean(dayCfg.closed) || (cfg.closedDays || []).includes(idx);
+            const row = document.createElement('div');
+            row.className = 'weekly-hours-row';
+            row.dataset.day = idx;
+            row.innerHTML = `
+                <label class="weekly-day"><input type="checkbox" class="cfg-day-closed" ${isClosed ? 'checked' : ''}> ${name} cerrado</label>
+                <select class="custom-select cfg-day-open">${timeOptions}</select>
+                <select class="custom-select cfg-day-close">${timeOptions}</select>
+            `;
+            row.querySelector('.cfg-day-open').value = dayCfg.open || cfg.openTime || '09:00';
+            row.querySelector('.cfg-day-close').value = dayCfg.close || cfg.closeTime || '20:00';
+            weeklyContainer.appendChild(row);
+        });
+        initCustomSelects();
+    }
 
     // Poblar select de empleadas para el bloqueo
     const empSel = document.getElementById('cfg-block-employee');
@@ -3494,22 +3556,27 @@ function initBusinessConfigUI() {
             const latest = getBusinessConfig();
             document.getElementById('cfg-open-time').value = latest.openTime || '';
             document.getElementById('cfg-close-time').value = latest.closeTime || '';
-            document.getElementById('cfg-lunch-start').value = latest.lunchStart || '';
-            document.getElementById('cfg-lunch-end').value = latest.lunchEnd || '';
-            ['cfg-open-time', 'cfg-close-time', 'cfg-lunch-start', 'cfg-lunch-end'].forEach(id => syncCustomSelect(id));
+            ['cfg-open-time', 'cfg-close-time'].forEach(id => syncCustomSelect(id));
         });
 
         document.getElementById('btn-save-business-cfg').addEventListener('click', () => {
             const closedDays = Array.from(daysContainer.querySelectorAll('input[type="checkbox"]:checked')).map(i => parseInt(i.dataset.day));
+            const weeklyHours = {};
+            document.querySelectorAll('#cfg-weekly-hours .weekly-hours-row').forEach(row => {
+                const day = row.dataset.day;
+                const closed = row.querySelector('.cfg-day-closed')?.checked || false;
+                const open = row.querySelector('.cfg-day-open')?.value || '';
+                const close = row.querySelector('.cfg-day-close')?.value || '';
+                weeklyHours[day] = { closed, open, close };
+            });
             const current = getBusinessConfig();
             const newCfg = {
                 ...current,
                 openTime: document.getElementById('cfg-open-time').value,
                 closeTime: document.getElementById('cfg-close-time').value,
-                lunchStart: document.getElementById('cfg-lunch-start').value,
-                lunchEnd: document.getElementById('cfg-lunch-end').value,
                 timeFormat: document.getElementById('cfg-time-format').value,
-                closedDays
+                closedDays,
+                weeklyHours
             };
             saveBusinessConfig(newCfg);
             populateTimeSelects();
@@ -3881,7 +3948,7 @@ function renderServicesList() {
 }
 
 function renderEmployeesList() {
-    const lists = ['settings-employees-list', 'staff-employees-list']
+    const lists = ['settings-employees-list']
         .map(id => document.getElementById(id))
         .filter(Boolean);
 
