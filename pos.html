@@ -20,7 +20,7 @@
     <!-- Supabase -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     
-    <link rel="stylesheet" href="pos.css?v=202605140400">
+    <link rel="stylesheet" href="pos.css?v=202605140500">
 </head>
 <body>
 
@@ -997,7 +997,11 @@
                     </div>
                 </div>
 
-                <div class="modal-footer">
+                <div class="modal-footer" style="display:flex;justify-content:space-between;align-items:center;">
+                    <button type="button" class="btn btn-danger btn-sm hidden" id="btn-delete-client" style="gap:4px;">
+                        <i data-lucide="trash-2" style="width:14px;height:14px;"></i>
+                        <span>Eliminar</span>
+                    </button>
                     <button type="button" class="btn btn-primary" id="btn-save-client">
                         <i data-lucide="save"></i>
                         <span>Guardar Perfil</span>
@@ -1497,15 +1501,15 @@
 
     <!-- Scripts del Sistema -->
     <script src="config.js?v=202604260900"></script>
-    <script src="state.js?v=202605140400"></script>
+    <script src="state.js?v=202605140500"></script>
     <script src="validation.js?v=202604260900"></script>
     <script src="auth.js?v=202604260900"></script>
     <script src="supabase-helpers.js?v=202604260900"></script>
     <script src="clients.js?v=202604260900"></script>
-    <script src="pos.js?v=202605140400"></script>
+    <script src="pos.js?v=202605140500"></script>
     <script src="pos.dashboard.js?v=202605131630"></script>
     <script src="pos.services.js?v=202604260900"></script>
-    <script src="pos.config.js?v=202605140400"></script>
+    <script src="pos.config.js?v=202605140500"></script>
     <!-- Modal: Cierre de Caja (Formulario) -->
     <div class="modal-overlay" id="modal-closure">
         <div class="modal" style="max-width: 480px;">

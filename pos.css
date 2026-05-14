@@ -323,6 +323,8 @@ input:checked + .slider:before { transform: translateX(24px); background-color: 
 .btn-primary:hover { box-shadow: 0 4px 15px rgba(201,168,76,0.3); transform: translateY(-2px); }
 .btn-ghost { background: transparent; color: var(--text-secondary); border: 1px solid var(--border-subtle); }
 .btn-ghost:hover { color: var(--text-primary); background: var(--bg-hover); }
+.btn-danger { background: var(--danger); color: #fff; }
+.btn-danger:hover { box-shadow: 0 4px 15px rgba(239,68,68,0.35); transform: translateY(-2px); filter: brightness(1.1); }
 .btn-sm { padding: 0.5rem 1rem; font-size: 0.85rem; }
 
 /* ═══════════ AUTOCOMPLETE & ALERTS ═══════════ */

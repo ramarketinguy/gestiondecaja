@@ -1557,43 +1557,133 @@ function renderAgenda(dateStr) {
     const timeline = document.getElementById('agenda-timeline');
     timeline.innerHTML = '';
 
-    const normTime = (t) => (t || '').slice(0, 5);
+    const cfg = getBusinessConfig();
+    const _today = new Date();
+    const todayStr = `${_today.getFullYear()}-${String(_today.getMonth()+1).padStart(2,'0')}-${String(_today.getDate()).padStart(2,'0')}`;
+
     const dayApts = db.appointments
         .filter(a => getAppointmentDate(a) === dateStr)
         .sort((a,b) => getAppointmentTime(a).localeCompare(getAppointmentTime(b)));
 
+    // --- Citas del día ---
     if (dayApts.length === 0) {
-        timeline.innerHTML = `<div class="empty-state"><i data-lucide="coffee"></i><p>Sin citas para este día.</p></div>`;
-        refreshIcons();
-        return;
+        timeline.innerHTML = `<div class="empty-state" style="padding:1.5rem 0 .5rem;"><i data-lucide="coffee"></i><p>Sin citas para este día.</p></div>`;
+    } else {
+        const aptsHeader = document.createElement('h4');
+        aptsHeader.style.cssText = 'font-size:.8rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;margin:0 0 .6rem;padding:1rem 1.5rem 0;';
+        aptsHeader.textContent = `Citas programadas (${dayApts.length})`;
+        timeline.appendChild(aptsHeader);
+
+        dayApts.forEach(apt => {
+            const emp = db.employees.find(e => String(e.id) === String(getAppointmentEmployeeId(apt)));
+            const empColor = emp && emp.color ? emp.color : 'var(--accent)';
+            const service = db.services.find(s => s.name === apt.service);
+            const duration = service && service.duration ? service.duration : 60;
+
+            const eventEl = document.createElement('div');
+            eventEl.className = 'agenda-event';
+            eventEl.style.cssText = `background-color:${empColor};border-left:4px solid rgba(0,0,0,0.2);padding:10px 14px;border-radius:8px;margin:0 1.5rem 8px;cursor:pointer;transition:transform .15s,box-shadow .15s;`;
+            eventEl.innerHTML = `
+                <div class="event-time" style="font-weight:700;font-size:0.9rem;">${getAppointmentTime(apt) || '--:--'}</div>
+                <div class="event-title" style="font-size:0.85rem;margin-top:2px;">${apt.client_name || apt.clientName || 'Sin cliente'}</div>
+                <div class="event-desc" style="font-size:0.75rem;color:rgba(255,255,255,0.7);margin-top:2px;">${apt.service || 'Servicio'} ${emp ? '· ' + emp.name : ''} · ${duration}min</div>
+            `;
+            eventEl.onclick = () => openAppointmentDetail(apt);
+            eventEl.onmouseenter = () => { eventEl.style.transform = 'scale(1.02)'; eventEl.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)'; };
+            eventEl.onmouseleave = () => { eventEl.style.transform = ''; eventEl.style.boxShadow = ''; };
+            timeline.appendChild(eventEl);
+        });
     }
 
-    // Render as card-based timeline (no dependency on slot DOM elements)
-    dayApts.forEach(apt => {
-        const emp = db.employees.find(e => String(e.id) === String(getAppointmentEmployeeId(apt)));
-        const empColor = emp && emp.color ? emp.color : 'var(--accent)';
-        const service = db.services.find(s => s.name === apt.service);
-        const duration = service && service.duration ? service.duration : 60;
+    // --- Horarios disponibles (misma lógica que renderAgendaSidePanel) ---
+    const dayHours = getBusinessHoursForDate(dateStr);
+    const isClosed = dayHours.closed;
+    const isPastDate = dateStr < todayStr;
 
-        const eventEl = document.createElement('div');
-        eventEl.className = 'agenda-event';
-        eventEl.style.backgroundColor = empColor;
-        eventEl.style.borderLeft = `4px solid rgba(0,0,0,0.2)`;
-        eventEl.style.padding = '10px 14px';
-        eventEl.style.borderRadius = '8px';
-        eventEl.style.marginBottom = '8px';
-        eventEl.style.cursor = 'pointer';
-        eventEl.style.transition = 'transform 0.15s, box-shadow 0.15s';
-        eventEl.innerHTML = `
-            <div class="event-time" style="font-weight:700;font-size:0.9rem;">${getAppointmentTime(apt) || '--:--'}</div>
-            <div class="event-title" style="font-size:0.85rem;margin-top:2px;">${apt.client_name || apt.clientName || 'Sin cliente'}</div>
-            <div class="event-desc" style="font-size:0.75rem;color:rgba(255,255,255,0.7);margin-top:2px;">${apt.service || 'Servicio'} ${emp ? '· ' + emp.name : ''} · ${duration}min</div>
-        `;
-        eventEl.onclick = () => openAppointmentDetail(apt);
-        eventEl.onmouseenter = () => { eventEl.style.transform = 'scale(1.02)'; eventEl.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)'; };
-        eventEl.onmouseleave = () => { eventEl.style.transform = ''; eventEl.style.boxShadow = ''; };
-        timeline.appendChild(eventEl);
-    });
+    if (isClosed) {
+        const closedBadge = document.createElement('div');
+        closedBadge.className = 'badge badge-border';
+        closedBadge.style.cssText = 'color:var(--danger);border-color:var(--danger);margin:1rem 1.5rem .5rem;';
+        closedBadge.textContent = 'Negocio cerrado este día';
+        timeline.appendChild(closedBadge);
+    }
+
+    if (!isClosed && dayHours.openTime && dayHours.closeTime) {
+        const toMin = t => { const [h, mn] = t.split(':').map(n => parseInt(n)); return h*60 + mn; };
+        const toStr = mm => `${String(Math.floor(mm/60)).padStart(2,'0')}:${String(mm%60).padStart(2,'0')}`;
+        const start = toMin(dayHours.openTime);
+        const end = toMin(dayHours.closeTime);
+        const blocks = (cfg.blockedSlots || []).filter(b => b.date === dateStr);
+        const tempRes = (window.tempSlotReservation && window.tempSlotReservation.date === dateStr) ? window.tempSlotReservation.time : null;
+
+        const activeEmps = db.employees || [];
+        const maxConcurrent = activeEmps.length > 0 ? activeEmps.length : 1;
+        const slots = [];
+
+        for (let t = start; t < end; t += 30) {
+            const inBlock = blocks.some(b => t >= toMin(b.start) && t < toMin(b.end));
+            const ts = toStr(t);
+            const tempTaken = tempRes === ts;
+
+            let totalBusyCount = 0;
+            const busyEmpIds = [];
+            dayApts.forEach(a => {
+                if (!getAppointmentTime(a)) return;
+                const sTime = toMin(getAppointmentTime(a));
+                const srv = db.services.find(s => s.name === a.service);
+                const dur = srv && srv.duration ? parseInt(srv.duration) : 30;
+                const eTime = sTime + dur;
+                if (t >= sTime && t < eTime) {
+                    totalBusyCount++;
+                    const busyEmpId = getAppointmentEmployeeId(a);
+                    if (busyEmpId) busyEmpIds.push(busyEmpId);
+                }
+            });
+
+            if (!inBlock && !tempTaken && !isPastDate) {
+                if (totalBusyCount < maxConcurrent) {
+                    let bgColor = 'rgba(52,211,153,0.12)';
+                    let borderColor = 'rgba(52,211,153,0.3)';
+                    let textColor = 'var(--success)';
+                    if (totalBusyCount > 0 && activeEmps.length > 0) {
+                        const availableEmps = activeEmps.filter(e => !busyEmpIds.includes(e.id));
+                        if (availableEmps.length > 0 && availableEmps[0].color) {
+                            textColor = availableEmps[0].color;
+                            bgColor = availableEmps[0].color + '20';
+                            borderColor = availableEmps[0].color + '50';
+                        }
+                    }
+                    slots.push({ time: ts, bgColor, borderColor, textColor });
+                }
+            }
+        }
+
+        const slotsWrapper = document.createElement('div');
+        slotsWrapper.style.cssText = 'padding:0 1.5rem 1.5rem;';
+        slotsWrapper.innerHTML = `<h4 style="font-size:.8rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;margin:1.2rem 0 .6rem;font-weight:700;">Horarios disponibles <span style="color:var(--success);font-weight:600;">(${slots.length})</span></h4>`;
+
+        if (slots.length === 0) {
+            slotsWrapper.innerHTML += `<div style="color:var(--text-dim);font-size:.85rem;padding:.5rem;background:rgba(255,255,255,.03);border-radius:6px;text-align:center;">${isPastDate ? 'Fecha pasada.' : 'Sin huecos libres.'}</div>`;
+        } else {
+            slotsWrapper.innerHTML += `<div class="slots-grid">${slots.map(s =>
+                `<button type="button" class="slot-btn" data-slot-date="${dateStr}" data-slot-time="${s.time}" style="background:${s.bgColor};border-color:${s.borderColor};color:${s.textColor};">${s.time}</button>`
+            ).join('')}</div>`;
+        }
+        timeline.appendChild(slotsWrapper);
+
+        // Listeners: click en slot → abrir modal agendar
+        slotsWrapper.querySelectorAll('.slot-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const d = btn.dataset.slotDate;
+                const t = btn.dataset.slotTime;
+                window.tempSlotReservation = { date: d, time: t };
+                aptCurrentClient = null;
+                openAgendarModal(d, t);
+                renderAgenda(dateStr);
+            });
+        });
+    }
+
     refreshIcons();
 }
 
@@ -3124,6 +3214,9 @@ function initCRM() {
     document.getElementById('btn-new-client').addEventListener('click', () => openClientModal());
     document.getElementById('btn-close-modal').addEventListener('click', closeClientModal);
     document.getElementById('btn-save-client').addEventListener('click', saveClient);
+    document.getElementById('btn-delete-client').addEventListener('click', () => {
+        if (activeModal) deleteClient(activeModal);
+    });
     document.getElementById('search-client-table').addEventListener('input', (e) => renderClientsTable(e.target.value));
     document.getElementById('btn-export-csv').addEventListener('click', exportClientesCSV);
     // Input file para subida de foto (usamos el del HTML si existe)
@@ -3365,7 +3458,12 @@ function openClientModal(clientId = null) {
 
     const bBadge = document.getElementById('crm-badge-balance');
     bBadge.classList.add('hidden');
-    
+
+    const delBtn = document.getElementById('btn-delete-client');
+    if (delBtn) {
+        if (clientId) { delBtn.classList.remove('hidden'); } else { delBtn.classList.add('hidden'); }
+    }
+
     if (clientId) {
         const c = db.clients.find(x => x.id == clientId);
         if (c) {
@@ -3435,6 +3533,96 @@ function openClientModal(clientId = null) {
         document.getElementById('cm-files-section').classList.add('hidden');
     }
     refreshIcons();
+}
+
+// Eliminar clienta con opción de cascada (transacciones, citas, archivos)
+async function deleteClient(clientId) {
+    const client = db.clients.find(c => c.id == clientId);
+    if (!client) return;
+
+    // Contar registros asociados
+    const txCount = db.transactions.filter(t => String(t.clientId || t.client_id) === String(clientId)).length;
+    const aptCount = db.appointments.filter(a => String(a.clientId || a.client_id) === String(clientId)).length;
+    const fileCount = (db.clientFiles || []).filter(f => String(f.clientId || f.client_id) === String(clientId)).length;
+    const hasRecords = txCount + aptCount + fileCount > 0;
+
+    // Paso 1: confirmar eliminación
+    const ok = await showCustomConfirm(
+        `¿Eliminar a "${client.name}" del directorio?` +
+        (hasRecords ? `\n\nTiene ${txCount} transacciones, ${aptCount} citas y ${fileCount} archivos asociados.` : ''),
+        { title: 'Eliminar clienta', confirmText: 'Eliminar', danger: true }
+    );
+    if (!ok) return;
+
+    // Paso 2: si tiene registros, preguntar si borrarlos
+    let deleteRecords = false;
+    if (hasRecords) {
+        deleteRecords = await showCustomConfirm(
+            `¿Eliminar también todos los registros de "${client.name}" de la base de datos?\n\n• Sí → se borran transacciones, citas y archivos.\n• No → los registros quedan pero sin clienta asignada.`,
+            { title: 'Eliminar registros asociados', confirmText: 'Sí, eliminar todo', cancelText: 'No, conservar registros', danger: true }
+        );
+    }
+
+    try {
+        const isLocal = String(clientId).startsWith('client_');
+
+        if (deleteRecords) {
+            // Delete transactions
+            if (!isLocal && window.supabaseClient) {
+                const { error } = await window.supabaseClient.from('transactions').delete().eq('client_id', clientId);
+                if (error) console.error('[DeleteClient] tx error:', error);
+            }
+            db.transactions = db.transactions.filter(t => t.clientId != clientId && t.client_id != clientId);
+
+            // Delete appointments
+            if (!isLocal && window.supabaseClient) {
+                const { error } = await window.supabaseClient.from('appointments').delete().eq('client_id', clientId);
+                if (error) console.error('[DeleteClient] apt error:', error);
+            }
+            db.appointments = db.appointments.filter(a => (a.clientId || a.client_id) != clientId);
+
+            // Delete client files (storage + records)
+            const clientFiles = (db.clientFiles || []).filter(f => (f.clientId || f.client_id) == clientId);
+            for (const f of clientFiles) {
+                if (f.file_url && window.supabaseClient) {
+                    const path = f.file_url.split('/storage/v1/object/public/')[1];
+                    if (path) await window.supabaseClient.storage.from(path.split('/')[0]).remove([path.split('/').slice(1).join('/')]);
+                }
+                if (f.id && !String(f.id).startsWith('file_') && window.supabaseClient) {
+                    await window.supabaseClient.from('client_files').delete().eq('id', f.id);
+                }
+            }
+            db.clientFiles = (db.clientFiles || []).filter(f => (f.clientId || f.client_id) != clientId);
+            persistCollectionLocal('clientFiles', db.clientFiles);
+            persistCollectionLocal('transactions', db.transactions);
+            persistCollectionLocal('appointments', db.appointments);
+        }
+
+        // Delete the client
+        if (!isLocal && window.supabaseClient) {
+            // Delete profile photo from storage
+            if (client.photo_url) {
+                const path = client.photo_url.split('/storage/v1/object/public/')[1];
+                if (path) await window.supabaseClient.storage.from(path.split('/')[0]).remove([path.split('/').slice(1).join('/')]);
+            }
+            const { error } = await window.supabaseClient.from('clients').delete().eq('id', clientId);
+            if (error) { showToast('Error eliminando clienta: ' + error.message, 'error'); return; }
+        }
+        db.clients = db.clients.filter(c => c.id != clientId);
+        persistCollectionLocal('clients', db.clients);
+
+        // Limpiar localStorage asociado
+        localStorage.removeItem(`violet_log_${clientId}`);
+        localStorage.removeItem(`violet_photo_${clientId}`);
+
+        closeClientModal();
+        if (currentView === 'clients') renderClientsTable();
+        if (currentView === 'dashboard') initDashboard();
+        showToast(`"${client.name}" eliminada${deleteRecords ? ' con todos sus registros' : ''}`, 'success');
+    } catch (err) {
+        console.error('[DeleteClient]', err);
+        showToast('Error al eliminar: ' + (err.message || err), 'error');
+    }
 }
 
 // Devuelve mensajes del log de notas de citas de una clienta
