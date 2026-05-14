@@ -1450,12 +1450,12 @@ function renderAgendaSidePanel(dateStr) {
                 }
             }
         }
-        html += `<h5 style="font-size:.75rem;color:var(--text-dim);text-transform:uppercase;margin:1rem 0 .4rem;">Horarios disponibles</h5>`;
+        html += `<h5 style="font-size:.8rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;margin:1.2rem 0 .6rem;font-weight:700;">Horarios disponibles <span style="color:var(--success);font-weight:600;">(${slots.length})</span></h5>`;
         if (slots.length === 0) {
-            html += `<div style="color:var(--text-dim);font-size:.8rem;">${isPastDate ? 'Fecha pasada.' : 'Sin huecos libres.'}</div>`;
+            html += `<div style="color:var(--text-dim);font-size:.85rem;padding:.5rem;background:rgba(255,255,255,.03);border-radius:6px;text-align:center;">${isPastDate ? 'Fecha pasada.' : 'Sin huecos libres.'}</div>`;
         } else {
-            html += `<div style="display:flex;flex-wrap:wrap;gap:4px;">` +
-                slots.map(s => `<button type="button" class="slot-btn" data-slot-date="${dateStr}" data-slot-time="${s.time}" style="padding:4px 10px;background:${s.bgColor};border:1px solid ${s.borderColor};color:${s.textColor};border-radius:4px;font-size:.72rem;cursor:pointer;font-family:inherit;">${s.time}</button>`).join('') +
+            html += `<div class="slots-grid">` +
+                slots.map(s => `<button type="button" class="slot-btn" data-slot-date="${dateStr}" data-slot-time="${s.time}" style="background:${s.bgColor};border-color:${s.borderColor};color:${s.textColor};">${s.time}</button>`).join('') +
                 `</div>`;
         }
     }
@@ -2111,6 +2111,11 @@ async function saveTransaction() {
                 document.getElementById('btn-save-transaction').disabled = false;
                 return;
             }
+            if (debtAmount >= transactionSchema.amount) {
+                showToast('La deuda no puede ser mayor o igual al precio del servicio.', 'error');
+                document.getElementById('btn-save-transaction').disabled = false;
+                return;
+            }
             if (currentClient) {
                 currentClient.debt = (parseFloat(currentClient.debt) || 0) + debtAmount;
                 await window.supabaseClient.from('clients').update({debt: currentClient.debt}).eq('id', currentClient.id);
@@ -2118,6 +2123,8 @@ async function saveTransaction() {
                 const fmt2 = n => Number(n).toLocaleString('es-UY');
                 addClientLog(currentClient.id, `⚠ DEUDA GENERADA: $${fmt2(debtAmount)}`);
             }
+            // Restar la deuda del monto registrado en caja (la clienta solo pagó la diferencia)
+            transactionSchema.amount = transactionSchema.amount - debtAmount;
             transactionSchema.detail += ` (Generó Deuda: ${debtAmount})`;
         }
 
@@ -2750,6 +2757,26 @@ function renderClosuresHistory() {
     refreshIcons();
 }
 
+function getClosureTransactions(closure) {
+    // Devuelve todas las transacciones que pertenecen a este cierre: las que
+    // ocurrieron el mismo día del cierre, ANTES de la hora del cierre, y DESPUÉS
+    // del cierre anterior del mismo día (si hay).
+    const closureDate = new Date(closure.closure_date);
+    // Cierre anterior del mismo día (si existe)
+    const sameDayPrior = db.closures
+        .filter(c => c.id != closure.id && isSameDay(c.closure_date, closure.closure_date)
+            && new Date(c.closure_date) < closureDate)
+        .sort((a, b) => new Date(b.closure_date) - new Date(a.closure_date))[0];
+    const lowerBound = sameDayPrior ? new Date(sameDayPrior.closure_date) : null;
+    return db.transactions.filter(t => {
+        if (!isSameDay(t.date, closure.closure_date)) return false;
+        const td = new Date(t.date);
+        if (td > closureDate) return false;
+        if (lowerBound && td <= lowerBound) return false;
+        return true;
+    }).sort((a, b) => new Date(b.date) - new Date(a.date));
+}
+
 function openClosureDetailModal(closureId) {
     const c = db.closures.find(x => x.id == closureId);
     if (!c) return;
@@ -2759,35 +2786,291 @@ function openClosureDetailModal(closureId) {
     const dateStr = date.toLocaleDateString('es-UY', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
     const timeStr = date.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
 
+    const txs = getClosureTransactions(c);
+
+    // Agrupar transacciones por fecha (para pagos mixtos)
+    const grouped = {};
+    txs.forEach(t => {
+        if (!grouped[t.date]) grouped[t.date] = [];
+        grouped[t.date].push(t);
+    });
+
+    let txRowsHTML = '';
+    if (txs.length === 0) {
+        txRowsHTML = `<div style="text-align:center; padding:1.5rem; color:var(--text-dim); font-size:.85rem;">Sin movimientos registrados para este cierre.</div>`;
+    } else {
+        Object.values(grouped).forEach(group => {
+            const main = group.find(g => !txIsTip(g)) || group[0];
+            const time = new Date(main.date).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+            let amountSum = 0, tipSum = 0;
+            const breakdownLines = [];
+            const txIds = group.map(g => g.id);
+            group.forEach(g => {
+                if (txIsTip(g)) tipSum += g.amount;
+                else if (g.isIncome) amountSum += g.amount;
+                else amountSum -= g.amount;
+                const methodLabel = g.method === 'tarjeta_debito' ? 'T.Débito'
+                    : g.method === 'tarjeta_credito' ? 'T.Crédito' : g.method;
+                breakdownLines.push(`<span style="color:var(--text-dim);">${methodLabel}: $${fmt(g.amount)}</span>`);
+            });
+            const cleanDetail = (main.detail || 'Servicio').split(' (')[0];
+            const sign = amountSum >= 0 ? '+' : '-';
+            const color = amountSum >= 0 ? 'var(--success)' : 'var(--danger)';
+            const isGroup = group.length > 1;
+            const idsAttr = txIds.join(',');
+
+            txRowsHTML += `
+                <div class="closure-tx-row" style="display:flex; align-items:center; gap:.6rem; padding:.55rem .65rem; background:rgba(255,255,255,.02); border:1px solid var(--border-subtle); border-radius:6px; margin-bottom:6px;">
+                    <div style="font-size:.72rem; color:var(--text-dim); min-width:42px;">${time}</div>
+                    <div style="flex:1; min-width:0;">
+                        <div style="font-size:.85rem; font-weight:600; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${main.clientName || (main.isIncome ? 'General' : 'Retiro')}</div>
+                        <div style="font-size:.72rem; color:var(--text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${cleanDetail} · ${breakdownLines.join(' · ')}${tipSum ? ` · <span style="color:var(--gold-400);">Propina $${fmt(tipSum)}</span>` : ''}</div>
+                    </div>
+                    <div style="font-weight:700; color:${color}; font-size:.9rem; white-space:nowrap;">${sign}$${fmt(Math.abs(amountSum))}</div>
+                    <button class="btn-icon btn-edit-closure-tx" data-tx-ids="${idsAttr}" title="Editar" style="padding:5px;"><i data-lucide="edit-2" style="width:14px;height:14px;color:var(--violet-300);"></i></button>
+                    <button class="btn-icon btn-del-closure-tx" data-tx-ids="${idsAttr}" title="Eliminar" style="padding:5px;"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--danger);"></i></button>
+                </div>`;
+        });
+    }
+
     document.getElementById('closure-detail-body').innerHTML = `
-        <div style="background: linear-gradient(135deg, rgba(91,58,138,0.2), rgba(201,168,76,0.1)); border-radius:16px; padding:24px; text-align:center; margin-bottom:20px; border: 1px solid rgba(155,114,212,0.25); box-shadow: 0 8px 32px rgba(0,0,0,0.2);">
-            <div style="font-size:0.75rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:1.5px; margin-bottom:8px; font-weight:600;">Balance del Día</div>
-            <div style="font-size:2.8rem; font-weight:900; color:var(--success); text-shadow: 0 0 20px rgba(74,222,128,0.3);">$${fmt(c.total_amount)}</div>
-            <div style="font-size:0.85rem; color:var(--text-dim); margin-top:6px; opacity:0.8;">${dateStr} · ${timeStr}</div>
+        <div style="background: linear-gradient(135deg, rgba(91,58,138,0.2), rgba(201,168,76,0.1)); border-radius:16px; padding:20px; text-align:center; margin-bottom:16px; border: 1px solid rgba(155,114,212,0.25);">
+            <div style="font-size:0.7rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:1.5px; margin-bottom:6px; font-weight:600;">Balance del Cierre</div>
+            <div style="font-size:2.4rem; font-weight:900; color:var(--success);">$${fmt(c.total_amount)}</div>
+            <div style="font-size:0.8rem; color:var(--text-dim); margin-top:4px;">${dateStr} · ${timeStr}</div>
         </div>
 
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:1.5rem;">
-            <div style="background:rgba(0,0,0,0.2); padding:12px; border-radius:8px;">
-                <div style="font-size:0.7rem; color:var(--text-dim); text-transform:uppercase;">Efectivo</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:1rem;">
+            <div style="background:rgba(0,0,0,0.2); padding:10px; border-radius:6px;">
+                <div style="font-size:0.68rem; color:var(--text-dim); text-transform:uppercase;">Efectivo</div>
                 <div style="font-size:1rem; font-weight:700; color:var(--text-primary);">$${fmt(c.cash_amount)}</div>
             </div>
-            <div style="background:rgba(0,0,0,0.2); padding:12px; border-radius:8px;">
-                <div style="font-size:0.7rem; color:var(--text-dim); text-transform:uppercase;">Digital</div>
+            <div style="background:rgba(0,0,0,0.2); padding:10px; border-radius:6px;">
+                <div style="font-size:0.68rem; color:var(--text-dim); text-transform:uppercase;">Digital</div>
                 <div style="font-size:1rem; font-weight:700; color:var(--text-primary);">$${fmt(c.digital_amount)}</div>
             </div>
         </div>
 
-        <div style="background:rgba(255,255,255,0.03); padding:12px; border-radius:8px; border: 1px solid var(--border);">
-            <div style="font-size:0.7rem; color:var(--text-dim); text-transform:uppercase; margin-bottom:5px;">Notas / Observaciones</div>
-            <div style="font-size:0.85rem; color:var(--text-primary); line-height:1.4;">${c.note || 'Sin observaciones.'}</div>
+        <div style="margin-bottom:1rem;">
+            <div style="font-size:.72rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:.5px; margin-bottom:.5rem; display:flex; justify-content:space-between; align-items:center;">
+                <span>Movimientos incluidos (${txs.length})</span>
+            </div>
+            <div style="max-height:280px; overflow-y:auto; padding-right:4px;">
+                ${txRowsHTML}
+            </div>
         </div>
-        
-        <div style="margin-top:1.5rem; text-align:center; font-size:0.75rem; color:var(--text-dim);">
+
+        <div style="background:rgba(255,255,255,0.03); padding:10px; border-radius:6px; border: 1px solid var(--border); margin-bottom:1rem;">
+            <div style="font-size:0.68rem; color:var(--text-dim); text-transform:uppercase; margin-bottom:4px;">Notas / Observaciones</div>
+            <div style="font-size:0.82rem; color:var(--text-primary); line-height:1.4;">${c.note || 'Sin observaciones.'}</div>
+        </div>
+
+        <div style="display:flex; gap:.5rem; margin-top:1rem;">
+            <button id="btn-delete-closure" class="btn btn-ghost btn-sm" style="flex:1; color:var(--danger); border-color:rgba(248,113,113,.3);" data-closure-id="${c.id}">
+                <i data-lucide="trash-2"></i> Eliminar cierre
+            </button>
+        </div>
+
+        <div style="margin-top:.8rem; text-align:center; font-size:0.7rem; color:var(--text-dim);">
             Realizado por ${c.created_by || 'Patricia'}
         </div>
     `;
-    
+
+    // Wire up edit/delete buttons
+    document.querySelectorAll('.btn-edit-closure-tx').forEach(btn => {
+        btn.onclick = () => {
+            const ids = btn.dataset.txIds.split(',');
+            editClosureTransaction(ids, c.id);
+        };
+    });
+    document.querySelectorAll('.btn-del-closure-tx').forEach(btn => {
+        btn.onclick = () => {
+            const ids = btn.dataset.txIds.split(',');
+            deleteClosureTransaction(ids, c.id);
+        };
+    });
+    const delClosureBtn = document.getElementById('btn-delete-closure');
+    if (delClosureBtn) delClosureBtn.onclick = () => deleteClosureFull(c.id);
+
+    refreshIcons();
     document.getElementById('modal-closure-detail').classList.add('open');
+}
+
+async function deleteClosureFull(closureId) {
+    const c = db.closures.find(x => x.id == closureId);
+    if (!c) return;
+    if (!confirm(`¿Eliminar el cierre del ${new Date(c.closure_date).toLocaleDateString('es-UY')} (${new Date(c.closure_date).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})})?\n\nLas transacciones NO se eliminan, solo el cierre.`)) return;
+    try {
+        const isLocalId = String(c.id).startsWith('closure_');
+        if (!isLocalId && window.supabaseClient) {
+            const { error } = await window.supabaseClient.from('closures').delete().eq('id', c.id);
+            if (error) throw error;
+        }
+        db.closures = db.closures.filter(x => x.id != closureId);
+        persistCollectionLocal('closures', db.closures);
+        renderClosuresHistory();
+        const modal = document.getElementById('modal-closure-detail');
+        if (modal) modal.classList.remove('open');
+        showToast('Cierre eliminado.', 'success');
+    } catch (e) {
+        console.error('[Cierre] Error al eliminar:', e);
+        showToast('Error al eliminar el cierre: ' + (e.message || e), 'error');
+    }
+}
+
+async function deleteClosureTransaction(txIds, closureId) {
+    if (!txIds || txIds.length === 0) return;
+    const txs = db.transactions.filter(t => txIds.includes(String(t.id)));
+    if (txs.length === 0) return;
+    const main = txs.find(t => !txIsTip(t)) || txs[0];
+    const label = `${main.clientName || (main.isIncome ? 'General' : 'Retiro')} · ${(main.detail || '').split(' (')[0]}`;
+    if (!confirm(`¿Eliminar el movimiento "${label}"?\n\nEsto borrará ${txs.length} registro(s) y NO se puede deshacer.`)) return;
+    try {
+        for (const id of txIds) {
+            const tx = db.transactions.find(t => String(t.id) === String(id));
+            if (!tx) continue;
+            const isLocalId = String(id).startsWith('tx_');
+            if (!isLocalId && window.supabaseClient) {
+                const { error } = await window.supabaseClient.from('transactions').delete().eq('id', id);
+                if (error) throw error;
+            }
+        }
+        db.transactions = db.transactions.filter(t => !txIds.includes(String(t.id)));
+        persistCollectionLocal('transactions', db.transactions);
+        showToast('Movimiento eliminado.', 'success');
+        // Refresh closure detail and parent table
+        if (typeof renderTransactionsTable === 'function') renderTransactionsTable();
+        if (typeof updateStats === 'function') updateStats();
+        renderClosuresHistory();
+        openClosureDetailModal(closureId);
+    } catch (e) {
+        console.error('[Cierre] Error al eliminar transacción:', e);
+        showToast('Error al eliminar: ' + (e.message || e), 'error');
+    }
+}
+
+function editClosureTransaction(txIds, closureId) {
+    const txs = db.transactions.filter(t => txIds.includes(String(t.id)));
+    if (txs.length === 0) return;
+    openEditTransactionModal(txs, closureId);
+}
+
+function openEditTransactionModal(txs, returnToClosureId) {
+    const main = txs.find(t => !txIsTip(t)) || txs[0];
+    const tip = txs.find(t => txIsTip(t));
+
+    const fmt = n => Number(n).toLocaleString('es-UY');
+    const date = new Date(main.date);
+    const timeStr = date.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+    const dateStr = date.toLocaleDateString('es-UY', { day:'2-digit', month:'2-digit', year:'numeric' });
+
+    // Construir filas editables para cada parte del pago
+    let partsHTML = '';
+    txs.forEach((t, idx) => {
+        if (txIsTip(t)) return;
+        partsHTML += `
+            <div style="display:grid; grid-template-columns:1.2fr 1fr; gap:.6rem; margin-bottom:.5rem;">
+                <div class="form-group" style="margin:0;">
+                    <label style="font-size:.7rem;">Monto ${idx === 0 ? 'principal' : `parte ${idx+1}`} ($)</label>
+                    <input type="number" class="edit-tx-amount" data-tx-id="${t.id}" value="${t.amount}" min="0" step="1" onwheel="this.blur()" style="width:100%; padding:.5rem; background:var(--bg-input); border:1px solid var(--border-subtle); border-radius:6px; color:var(--text-primary);">
+                </div>
+                <div class="form-group" style="margin:0;">
+                    <label style="font-size:.7rem;">Método</label>
+                    <select class="edit-tx-method" data-tx-id="${t.id}" style="width:100%; padding:.5rem; background:var(--bg-input); border:1px solid var(--border-subtle); border-radius:6px; color:var(--text-primary);">
+                        <option value="efectivo" ${t.method === 'efectivo' ? 'selected' : ''}>Efectivo</option>
+                        <option value="transferencia" ${t.method === 'transferencia' ? 'selected' : ''}>Transferencia</option>
+                        <option value="tarjeta_debito" ${t.method === 'tarjeta_debito' ? 'selected' : ''}>Tarjeta Débito</option>
+                        <option value="tarjeta_credito" ${t.method === 'tarjeta_credito' ? 'selected' : ''}>Tarjeta Crédito</option>
+                        <option value="seña" ${t.method === 'seña' ? 'selected' : ''}>Seña</option>
+                    </select>
+                </div>
+            </div>
+        `;
+    });
+    if (tip) {
+        partsHTML += `
+            <div style="display:grid; grid-template-columns:1.2fr 1fr; gap:.6rem; margin-bottom:.5rem;">
+                <div class="form-group" style="margin:0;">
+                    <label style="font-size:.7rem; color:var(--gold-400);">Propina ($)</label>
+                    <input type="number" class="edit-tx-amount" data-tx-id="${tip.id}" value="${tip.amount}" min="0" step="1" onwheel="this.blur()" style="width:100%; padding:.5rem; background:var(--bg-input); border:1px solid var(--border-subtle); border-radius:6px; color:var(--text-primary);">
+                </div>
+                <div class="form-group" style="margin:0;">
+                    <label style="font-size:.7rem;">Método propina</label>
+                    <select class="edit-tx-method" data-tx-id="${tip.id}" style="width:100%; padding:.5rem; background:var(--bg-input); border:1px solid var(--border-subtle); border-radius:6px; color:var(--text-primary);">
+                        <option value="efectivo" ${tip.method === 'efectivo' ? 'selected' : ''}>Efectivo</option>
+                        <option value="transferencia" ${tip.method === 'transferencia' ? 'selected' : ''}>Transferencia</option>
+                    </select>
+                </div>
+            </div>
+        `;
+    }
+
+    const bodyHTML = `
+        <div style="background:rgba(91,58,138,0.1); border-radius:8px; padding:.8rem; margin-bottom:1rem;">
+            <div style="font-size:.75rem; color:var(--text-dim);">Movimiento del ${dateStr} a las ${timeStr}</div>
+            <div style="font-size:.95rem; font-weight:700; color:var(--text-primary); margin-top:2px;">${main.clientName || (main.isIncome ? 'General' : 'Retiro')}</div>
+            <div style="font-size:.78rem; color:var(--text-dim); margin-top:2px;">${(main.detail || '').split(' (')[0]} · ${main.employee || ''}</div>
+        </div>
+        ${partsHTML}
+        <div style="display:flex; gap:.5rem; margin-top:1rem;">
+            <button id="btn-cancel-edit-tx" class="btn btn-ghost btn-sm" style="flex:1;">Cancelar</button>
+            <button id="btn-save-edit-tx" class="btn btn-primary btn-sm" style="flex:1;" data-tx-ids="${txs.map(t => t.id).join(',')}" data-closure-id="${returnToClosureId || ''}">
+                <i data-lucide="check"></i> Guardar cambios
+            </button>
+        </div>
+    `;
+
+    // Reutilizar el modal de detalle de cierre como contenedor temporal de edición
+    document.getElementById('closure-detail-body').innerHTML = bodyHTML;
+    document.getElementById('modal-closure-detail').classList.add('open');
+    refreshIcons();
+
+    document.getElementById('btn-cancel-edit-tx').onclick = () => {
+        if (returnToClosureId) openClosureDetailModal(returnToClosureId);
+        else document.getElementById('modal-closure-detail').classList.remove('open');
+    };
+    document.getElementById('btn-save-edit-tx').onclick = async () => {
+        await saveTransactionEdits(txs.map(t => t.id), returnToClosureId);
+    };
+}
+
+async function saveTransactionEdits(txIds, returnToClosureId) {
+    const updates = [];
+    document.querySelectorAll('.edit-tx-amount').forEach(input => {
+        const id = input.dataset.txId;
+        const amount = parseFloat(input.value);
+        const methodEl = document.querySelector(`.edit-tx-method[data-tx-id="${id}"]`);
+        const method = methodEl ? methodEl.value : null;
+        if (!isNaN(amount) && amount >= 0) {
+            updates.push({ id, amount, method });
+        }
+    });
+
+    try {
+        for (const u of updates) {
+            const tx = db.transactions.find(t => String(t.id) === String(u.id));
+            if (!tx) continue;
+            const isLocalId = String(u.id).startsWith('tx_');
+            tx.amount = u.amount;
+            if (u.method) tx.method = u.method;
+            if (!isLocalId && window.supabaseClient) {
+                const payload = { amount: u.amount };
+                if (u.method) payload.method = u.method;
+                const { error } = await window.supabaseClient.from('transactions').update(payload).eq('id', u.id);
+                if (error) throw error;
+            }
+        }
+        persistCollectionLocal('transactions', db.transactions);
+        showToast('Movimiento actualizado.', 'success');
+        if (typeof renderTransactionsTable === 'function') renderTransactionsTable();
+        if (typeof updateStats === 'function') updateStats();
+        renderClosuresHistory();
+        if (returnToClosureId) openClosureDetailModal(returnToClosureId);
+        else document.getElementById('modal-closure-detail').classList.remove('open');
+    } catch (e) {
+        console.error('[EditTx] Error:', e);
+        showToast('Error al guardar: ' + (e.message || e), 'error');
+    }
 }
 
 // ==========================================
@@ -4582,9 +4865,15 @@ function checkBirthdayAlert() {
 // ==========================================
 function isSameDay(d1, d2) {
     if (!d1 || !d2) return false;
-    const date1 = new Date(d1).toISOString().slice(0, 10);
-    const date2 = new Date(d2).toISOString().slice(0, 10);
-    return date1 === date2;
+    // Comparar usando fecha LOCAL (no UTC) para evitar desfasaje de zona horaria.
+    // Antes: toISOString().slice(0,10) usaba UTC y rompía la comparación cuando
+    // la hora local cruzaba medianoche en UTC (ej. 21:30 UY = 00:30 UTC siguiente día).
+    const date1 = new Date(d1);
+    const date2 = new Date(d2);
+    if (isNaN(date1.getTime()) || isNaN(date2.getTime())) return false;
+    return date1.getFullYear() === date2.getFullYear()
+        && date1.getMonth() === date2.getMonth()
+        && date1.getDate() === date2.getDate();
 }
 
 function openCierreCaja() {
