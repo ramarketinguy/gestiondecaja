@@ -635,6 +635,11 @@ function initNavigation() {
         else if (viewId === 'caja') { updateStats(); renderTransactionsTable(); }
         else if (viewId === 'clients') renderClientsTable();
         else if (viewId === 'staff') renderStaffPanel();
+        else if (viewId === 'agenda') {
+            const picker = document.getElementById('agenda-date-picker');
+            if (typeof renderAgenda === 'function') renderAgenda(picker?.value);
+            else if (typeof renderAgendaMonth === 'function') renderAgendaMonth();
+        }
         else if (viewId === 'analytics') {
             // El tab activo por defecto es "Historial de Cierres". Renderizamos
             // ambos contenidos (cierres + stats) y dejamos visible el activo.
@@ -647,7 +652,8 @@ function initNavigation() {
     const closeBtn = document.getElementById('btn-close-register');
     if (closeBtn) {
         closeBtn.addEventListener('click', async () => {
-            if (confirm('¿Cerrar sesión?')) {
+            const ok = await showCustomConfirm('¿Cerrar sesión?', { title: 'Cerrar sesión', confirmText: 'Cerrar sesión' });
+            if (ok) {
                 await window.supabaseClient.auth.signOut();
                 resetState();
                 window.location.href = 'index.html';
@@ -1125,8 +1131,9 @@ async function saveAppointment() {
     if (!dateInput) { showToast('Seleccioná una fecha', 'error'); return; }
     if (!timeInput) { showToast('Seleccioná una hora', 'error'); return; }
 
-    // No permitir fechas pasadas
-    const todayStr = new Date().toISOString().slice(0, 10);
+    // No permitir fechas pasadas (LOCAL, no UTC)
+    const _today = new Date();
+    const todayStr = `${_today.getFullYear()}-${String(_today.getMonth()+1).padStart(2,'0')}-${String(_today.getDate()).padStart(2,'0')}`;
     if (dateInput < todayStr) {
         showToast('No se puede agendar en una fecha pasada', 'error');
         return;
@@ -1151,9 +1158,11 @@ async function saveAppointment() {
     });
 
     if (hasCollision) {
-        if (!confirm('¡Atención! Este horario ya está ocupado para esta funcionaria. ¿Deseas agendar de todas formas?')) {
-            return;
-        }
+        const ok = await showCustomConfirm(
+            'Este horario ya está ocupado para esta funcionaria. ¿Deseas agendar de todas formas?',
+            { title: '¡Atención!', confirmText: 'Agendar igual' }
+        );
+        if (!ok) return;
     }
 
     // Crear clienta si no existe
@@ -1281,7 +1290,9 @@ function renderAgendaMonth() {
     const daysInMonth = lastDay.getDate();
 
     const cfg = getBusinessConfig();
-    const todayStr = new Date().toISOString().slice(0, 10);
+    // Fecha LOCAL para que el calendario destaque "hoy" correctamente en la zona horaria del usuario
+    const _today = new Date();
+    const todayStr = `${_today.getFullYear()}-${String(_today.getMonth()+1).padStart(2,'0')}-${String(_today.getDate()).padStart(2,'0')}`;
 
     // Cabecera de días de la semana
     const weekNames = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
@@ -1349,7 +1360,10 @@ function renderAgendaSidePanel(dateStr) {
     const panel = document.getElementById('agenda-side-content');
     if (!panel) return;
     const cfg = getBusinessConfig();
-    const todayStr = new Date().toISOString().slice(0, 10); // fix: defined locally
+    // Fecha LOCAL (no UTC). Antes el toISOString() usaba UTC y marcaba hoy
+    // como "fecha pasada" después de las 21h (UY UTC-3).
+    const _today = new Date();
+    const todayStr = `${_today.getFullYear()}-${String(_today.getMonth()+1).padStart(2,'0')}-${String(_today.getDate()).padStart(2,'0')}`;
 
     const [y, m, d] = dateStr.split('-').map(n => parseInt(n));
     const dateObj = new Date(y, m - 1, d);
@@ -1510,7 +1524,11 @@ function renderAgendaSidePanel(dateStr) {
             const id = btn.dataset.aptId;
             const apt = db.appointments.find(a => String(a.id) === String(id));
             if (!apt) return;
-            if (!confirm(`¿Eliminar la cita de ${apt.clientName || apt.client_name} el ${getAppointmentDate(apt)} a las ${getAppointmentTime(apt)}?`)) return;
+            const ok = await showCustomConfirm(
+                `¿Eliminar la cita de ${apt.clientName || apt.client_name} el ${getAppointmentDate(apt)} a las ${getAppointmentTime(apt)}?`,
+                { title: 'Eliminar cita', confirmText: 'Eliminar', danger: true }
+            );
+            if (!ok) return;
             const { error } = await window.supabaseClient.from('appointments').delete().eq('id', id);
             if (error) { console.error(error); showToast('Error eliminando cita: ' + error.message, 'error'); return; }
             db.appointments = db.appointments.filter(a => String(a.id) !== String(id));
@@ -1918,7 +1936,10 @@ function initQuickModals() {
         // Chequeo de duplicados
         const dup = findDuplicateClient(name, phone);
         if (dup) {
-            const use = confirm(`Ya existe una clienta similar: "${dup.name}"${dup.phone ? ' (' + dup.phone + ')' : ''}.\n\nAceptar = usar esa ficha existente.\nCancelar = crear una NUEVA de todos modos.`);
+            const use = await showCustomConfirm(
+                `Ya existe una clienta similar: "${dup.name}"${dup.phone ? ' (' + dup.phone + ')' : ''}.\n\n"Usar existente" = abrir esa ficha.\n"Crear nueva" = registrarla aunque sea similar.`,
+                { title: 'Clienta duplicada', confirmText: 'Usar existente', cancelText: 'Crear nueva' }
+            );
             if (use) {
                 showToast(`Usando ficha existente de ${dup.name}`, 'info');
                 closeQC();
@@ -2638,23 +2659,35 @@ function openCashClosureModal() {
     });
     empBreakdown += '</div>';
 
-    document.getElementById('closure-total-display').textContent = `$${fmt(cache.ef + cache.digital)}`;
-    document.getElementById('closure-cash-display').textContent = `$${fmt(cache.ef)}`;
-    document.getElementById('closure-digital-display').textContent = `$${fmt(cache.digital)}`;
-    document.getElementById('closure-date-display').textContent = today.toLocaleDateString('es-UY', { day:'numeric', month:'long', year:'numeric' });
-    document.getElementById('closure-note').value = '';
-    
-    // Inyectar desglose si hay
-    const container = document.getElementById('modal-closure').querySelector('.modal-body');
-    const existingBreakdown = container.querySelector('.closure-breakdown');
-    if (existingBreakdown) existingBreakdown.remove();
-    
-    const breakdownDiv = document.createElement('div');
-    breakdownDiv.className = 'closure-breakdown';
-    breakdownDiv.innerHTML = empBreakdown;
-    container.insertBefore(breakdownDiv, document.getElementById('closure-note').parentNode);
+    const modal = document.getElementById('modal-closure');
+    if (!modal) { showToast('No se encontró el modal de cierre.', 'error'); return; }
 
-    document.getElementById('modal-closure').classList.add('open');
+    const totalEl = document.getElementById('closure-total-display');
+    const cashEl = document.getElementById('closure-cash-display');
+    const digEl = document.getElementById('closure-digital-display');
+    const dateEl = document.getElementById('closure-date-display');
+    const noteEl = document.getElementById('closure-note');
+    if (totalEl) totalEl.textContent = `$${fmt(cache.ef + cache.digital)}`;
+    if (cashEl) cashEl.textContent = `$${fmt(cache.ef)}`;
+    if (digEl) digEl.textContent = `$${fmt(cache.digital)}`;
+    if (dateEl) dateEl.textContent = today.toLocaleDateString('es-UY', { day:'numeric', month:'long', year:'numeric' });
+    if (noteEl) noteEl.value = '';
+
+    // Inyectar desglose si hay
+    const container = modal.querySelector('.modal-body');
+    if (container) {
+        const existingBreakdown = container.querySelector('.closure-breakdown');
+        if (existingBreakdown) existingBreakdown.remove();
+
+        const breakdownDiv = document.createElement('div');
+        breakdownDiv.className = 'closure-breakdown';
+        breakdownDiv.innerHTML = empBreakdown;
+        const anchor = noteEl && noteEl.parentNode ? noteEl.parentNode : null;
+        if (anchor && anchor.parentNode === container) container.insertBefore(breakdownDiv, anchor);
+        else container.appendChild(breakdownDiv);
+    }
+
+    modal.classList.add('open');
 }
 
 async function saveCashClosure() {
@@ -2899,7 +2932,11 @@ function openClosureDetailModal(closureId) {
 async function deleteClosureFull(closureId) {
     const c = db.closures.find(x => x.id == closureId);
     if (!c) return;
-    if (!confirm(`¿Eliminar el cierre del ${new Date(c.closure_date).toLocaleDateString('es-UY')} (${new Date(c.closure_date).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})})?\n\nLas transacciones NO se eliminan, solo el cierre.`)) return;
+    const ok = await showCustomConfirm(
+        `¿Eliminar el cierre del ${new Date(c.closure_date).toLocaleDateString('es-UY')} (${new Date(c.closure_date).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})})?\n\nLas transacciones NO se eliminan, solo el cierre.`,
+        { title: 'Eliminar cierre', confirmText: 'Eliminar', danger: true }
+    );
+    if (!ok) return;
     try {
         const isLocalId = String(c.id).startsWith('closure_');
         if (!isLocalId && window.supabaseClient) {
@@ -2924,7 +2961,11 @@ async function deleteClosureTransaction(txIds, closureId) {
     if (txs.length === 0) return;
     const main = txs.find(t => !txIsTip(t)) || txs[0];
     const label = `${main.clientName || (main.isIncome ? 'General' : 'Retiro')} · ${(main.detail || '').split(' (')[0]}`;
-    if (!confirm(`¿Eliminar el movimiento "${label}"?\n\nEsto borrará ${txs.length} registro(s) y NO se puede deshacer.`)) return;
+    const ok = await showCustomConfirm(
+        `¿Eliminar el movimiento "${label}"?\n\nEsto borrará ${txs.length} registro(s) y NO se puede deshacer.`,
+        { title: 'Eliminar movimiento', confirmText: 'Eliminar', danger: true }
+    );
+    if (!ok) return;
     try {
         for (const id of txIds) {
             const tx = db.transactions.find(t => String(t.id) === String(id));
@@ -3227,7 +3268,8 @@ function renderClientFiles(clientId) {
 }
 
 async function deleteClientFile(fileId) {
-    if (!confirm('¿Eliminar este archivo permanentemente?')) return;
+    const ok = await showCustomConfirm('¿Eliminar este archivo permanentemente?', { title: 'Eliminar archivo', confirmText: 'Eliminar', danger: true });
+    if (!ok) return;
     
     try {
         const { error } = await window.supabaseClient.from('client_files').delete().eq('id', fileId);
@@ -3514,7 +3556,10 @@ async function saveClient() {
     if (!activeModal) {
         const dup = findDuplicateClient(clientData.name, clientData.phone);
         if (dup) {
-            const use = confirm(`Ya existe "${dup.name}"${dup.phone ? ' (' + dup.phone + ')' : ''}.\n\nAceptar = abrir esa ficha existente.\nCancelar = crear duplicada igualmente.`);
+            const use = await showCustomConfirm(
+                `Ya existe "${dup.name}"${dup.phone ? ' (' + dup.phone + ')' : ''}.\n\n"Abrir existente" = ir a la ficha actual.\n"Crear duplicada" = registrarla aunque sea similar.`,
+                { title: 'Clienta duplicada', confirmText: 'Abrir existente', cancelText: 'Crear duplicada' }
+            );
             if (use) {
                 btn.disabled = false;
                 closeClientModal();
@@ -3713,14 +3758,15 @@ function updateCharts() {
     });
 
     const dateInput = document.getElementById('employee-cash-date');
-    if (!dateInput.value) {
-        const todayLocal = new Date();
-        dateInput.value = `${todayLocal.getFullYear()}-${String(todayLocal.getMonth()+1).padStart(2,'0')}-${String(todayLocal.getDate()).padStart(2,'0')}`;
+    if (dateInput) {
+        if (!dateInput.value) {
+            const todayLocal = new Date();
+            dateInput.value = `${todayLocal.getFullYear()}-${String(todayLocal.getMonth()+1).padStart(2,'0')}-${String(todayLocal.getDate()).padStart(2,'0')}`;
+        }
+        dateInput.removeEventListener('change', renderEmployeeCashTable);
+        dateInput.addEventListener('change', renderEmployeeCashTable);
+        renderEmployeeCashTable();
     }
-    dateInput.removeEventListener('change', renderEmployeeCashTable);
-    dateInput.addEventListener('change', renderEmployeeCashTable);
-
-    renderEmployeeCashTable();
     renderServicesRanking();
 }
 
@@ -3756,9 +3802,12 @@ function updateAnalyticsStatCards() {
 
 function renderEmployeeCashTable() {
     const tbody = document.getElementById('employee-cash-tbody');
+    if (!tbody) return;
     tbody.innerHTML = '';
-    
-    const selectedDateStr = document.getElementById('employee-cash-date').value;
+
+    const dateEl = document.getElementById('employee-cash-date');
+    if (!dateEl) return;
+    const selectedDateStr = dateEl.value;
     const todaysTrans = db.transactions.filter(t => isSameDay(t.date, selectedDateStr + 'T12:00:00') && t.isIncome);
 
     if (db.employees.length === 0) {
@@ -3995,8 +4044,12 @@ function initBusinessConfigUI() {
             showToast('Configuración guardada');
         });
 
-        document.getElementById('btn-reset-business-cfg').addEventListener('click', () => {
-            if (!confirm('¿Restaurar la configuración de agenda a los valores predeterminados?')) return;
+        document.getElementById('btn-reset-business-cfg').addEventListener('click', async () => {
+            const ok = await showCustomConfirm(
+                '¿Restaurar la configuración de agenda a los valores predeterminados?',
+                { title: 'Restaurar configuración', confirmText: 'Restaurar' }
+            );
+            if (!ok) return;
             localStorage.removeItem('violet_business_config');
             initBusinessConfigUI();
             showToast('Configuración restaurada a predeterminados', 'info');
@@ -4418,7 +4471,11 @@ function renderEmployeesList() {
 async function deleteEmployee(id) {
     const emp = db.employees.find(x => String(x.id) === String(id));
     if (!emp) return;
-    if (!confirm(`¿Eliminar a ${emp.name}? Esta acción no se puede deshacer.`)) return;
+    const ok = await showCustomConfirm(
+        `¿Eliminar a ${emp.name}? Esta acción no se puede deshacer.`,
+        { title: 'Eliminar funcionaria', confirmText: 'Eliminar', danger: true }
+    );
+    if (!ok) return;
 
     const isLocalId = String(id).startsWith('emp_');
     if (!isLocalId) {
@@ -5059,6 +5116,53 @@ function scrollAIChat() {
     const c = document.getElementById('ai-messages');
     c.scrollTop = c.scrollHeight;
 }
+
+// Modal de confirmación con estilo de la app (reemplaza al confirm() nativo)
+function showCustomConfirm(message, { title = 'Confirmar', confirmText = 'Aceptar', cancelText = 'Cancelar', danger = false } = {}) {
+    return new Promise((resolve) => {
+        // Limpiar instancia previa si existiera
+        const prev = document.getElementById('modal-custom-confirm');
+        if (prev) prev.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'modal-custom-confirm';
+        overlay.className = 'modal-overlay open';
+        overlay.style.zIndex = '900';
+        overlay.innerHTML = `
+            <div class="modal" style="max-width:440px;">
+                <div class="modal-header">
+                    <h3 style="margin:0;font-size:1.05rem;color:var(--text-primary);display:flex;align-items:center;gap:.5rem;">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="${danger ? 'var(--danger)' : 'var(--gold-400)'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                            <line x1="12" y1="9" x2="12" y2="13"/>
+                            <line x1="12" y1="17" x2="12.01" y2="17"/>
+                        </svg>
+                        ${title}
+                    </h3>
+                </div>
+                <div class="modal-body" style="padding:1.2rem 1.5rem;">
+                    <p style="margin:0;color:var(--text-secondary);font-size:.92rem;line-height:1.5;white-space:pre-wrap;">${message}</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" id="cc-cancel">${cancelText}</button>
+                    <button type="button" class="btn ${danger ? 'btn-danger' : 'btn-primary'}" id="cc-ok">${confirmText}</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        const close = (val) => { overlay.remove(); resolve(val); };
+        overlay.querySelector('#cc-ok').addEventListener('click', () => close(true));
+        overlay.querySelector('#cc-cancel').addEventListener('click', () => close(false));
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(false); });
+        const onKey = (e) => {
+            if (e.key === 'Escape') { document.removeEventListener('keydown', onKey); close(false); }
+            else if (e.key === 'Enter') { document.removeEventListener('keydown', onKey); close(true); }
+        };
+        document.addEventListener('keydown', onKey);
+        setTimeout(() => overlay.querySelector('#cc-ok')?.focus(), 50);
+    });
+}
+window.showCustomConfirm = showCustomConfirm;
 
 function showToast(message, type = 'success') {
     let container = document.getElementById('toast-container');
