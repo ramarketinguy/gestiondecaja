@@ -20,7 +20,7 @@
     <!-- Supabase -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     
-    <link rel="stylesheet" href="pos.css?v=202605140500">
+    <link rel="stylesheet" href="pos.css?v=202605140600">
 </head>
 <body>
 
@@ -210,9 +210,17 @@
                     </div>
                 </div>
 
-                <!-- Vista Día (timeline) -->
-                <div class="agenda-timeline" id="agenda-timeline">
-                    <!-- JS rellena las horas y tarjetas -->
+                <!-- Vista Día (timeline + side panel) -->
+                <div id="agenda-day-view" style="padding:1rem 1.5rem 1.5rem;">
+                    <div style="display:grid;grid-template-columns: 2fr 1fr; gap:1.5rem;" id="agenda-day-layout">
+                        <div class="agenda-timeline" id="agenda-timeline">
+                            <!-- JS rellena las tarjetas de citas -->
+                        </div>
+                        <aside id="agenda-day-side-panel" style="background:rgba(0,0,0,0.2);border-radius:var(--radius);padding:1rem;min-height:400px;">
+                            <h4 style="margin:0 0 .8rem 0;font-size:.85rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;">Resumen del día</h4>
+                            <div id="agenda-day-side-content"></div>
+                        </aside>
+                    </div>
                 </div>
 
                 <!-- Vista Mes (grid + side panel) -->
@@ -1501,15 +1509,15 @@
 
     <!-- Scripts del Sistema -->
     <script src="config.js?v=202604260900"></script>
-    <script src="state.js?v=202605140500"></script>
+    <script src="state.js?v=202605140600"></script>
     <script src="validation.js?v=202604260900"></script>
     <script src="auth.js?v=202604260900"></script>
     <script src="supabase-helpers.js?v=202604260900"></script>
     <script src="clients.js?v=202604260900"></script>
-    <script src="pos.js?v=202605140500"></script>
+    <script src="pos.js?v=202605140600"></script>
     <script src="pos.dashboard.js?v=202605131630"></script>
     <script src="pos.services.js?v=202604260900"></script>
-    <script src="pos.config.js?v=202605140500"></script>
+    <script src="pos.config.js?v=202605140600"></script>
     <!-- Modal: Cierre de Caja (Formulario) -->
     <div class="modal-overlay" id="modal-closure">
         <div class="modal" style="max-width: 480px;">

@@ -883,11 +883,11 @@ function initAgenda() {
                 btn.style.background = 'var(--violet-600)';
                 btn.style.color = '#fff';
                 const view = btn.dataset.view;
-                const timeline = document.getElementById('agenda-timeline');
+                const dayView = document.getElementById('agenda-day-view');
                 const monthView = document.getElementById('agenda-month-view');
                 const picker = document.getElementById('agenda-date-picker');
                 if (view === 'month') {
-                    timeline.classList.add('hidden');
+                    dayView.classList.add('hidden');
                     monthView.classList.remove('hidden');
                     const [y, m] = picker.value.split('-').map(n => parseInt(n));
                     agendaMonthState.year = y;
@@ -895,7 +895,7 @@ function initAgenda() {
                     agendaMonthState.selectedDate = picker.value;
                     renderAgendaMonth();
                 } else {
-                    timeline.classList.remove('hidden');
+                    dayView.classList.remove('hidden');
                     monthView.classList.add('hidden');
                     renderAgenda(picker.value);
                 }
@@ -1557,23 +1557,14 @@ function renderAgenda(dateStr) {
     const timeline = document.getElementById('agenda-timeline');
     timeline.innerHTML = '';
 
-    const cfg = getBusinessConfig();
-    const _today = new Date();
-    const todayStr = `${_today.getFullYear()}-${String(_today.getMonth()+1).padStart(2,'0')}-${String(_today.getDate()).padStart(2,'0')}`;
-
     const dayApts = db.appointments
         .filter(a => getAppointmentDate(a) === dateStr)
         .sort((a,b) => getAppointmentTime(a).localeCompare(getAppointmentTime(b)));
 
-    // --- Citas del día ---
+    // --- Solo tarjetas de citas en la columna izquierda ---
     if (dayApts.length === 0) {
-        timeline.innerHTML = `<div class="empty-state" style="padding:1.5rem 0 .5rem;"><i data-lucide="coffee"></i><p>Sin citas para este día.</p></div>`;
+        timeline.innerHTML = `<div class="empty-state"><i data-lucide="coffee"></i><p>Sin citas para este día.</p></div>`;
     } else {
-        const aptsHeader = document.createElement('h4');
-        aptsHeader.style.cssText = 'font-size:.8rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;margin:0 0 .6rem;padding:1rem 1.5rem 0;';
-        aptsHeader.textContent = `Citas programadas (${dayApts.length})`;
-        timeline.appendChild(aptsHeader);
-
         dayApts.forEach(apt => {
             const emp = db.employees.find(e => String(e.id) === String(getAppointmentEmployeeId(apt)));
             const empColor = emp && emp.color ? emp.color : 'var(--accent)';
@@ -1582,7 +1573,7 @@ function renderAgenda(dateStr) {
 
             const eventEl = document.createElement('div');
             eventEl.className = 'agenda-event';
-            eventEl.style.cssText = `background-color:${empColor};border-left:4px solid rgba(0,0,0,0.2);padding:10px 14px;border-radius:8px;margin:0 1.5rem 8px;cursor:pointer;transition:transform .15s,box-shadow .15s;`;
+            eventEl.style.cssText = `background-color:${empColor};border-left:4px solid rgba(0,0,0,0.2);padding:10px 14px;border-radius:8px;margin-bottom:8px;cursor:pointer;transition:transform .15s,box-shadow .15s;`;
             eventEl.innerHTML = `
                 <div class="event-time" style="font-weight:700;font-size:0.9rem;">${getAppointmentTime(apt) || '--:--'}</div>
                 <div class="event-title" style="font-size:0.85rem;margin-top:2px;">${apt.client_name || apt.clientName || 'Sin cliente'}</div>
@@ -1594,96 +1585,181 @@ function renderAgenda(dateStr) {
             timeline.appendChild(eventEl);
         });
     }
+    refreshIcons();
 
-    // --- Horarios disponibles (misma lógica que renderAgendaSidePanel) ---
+    // --- Panel lateral derecho (reutiliza renderAgendaSidePanel) ---
+    renderAgendaDaySidePanel(dateStr);
+}
+
+// Panel lateral de la vista Día — mismo contenido que renderAgendaSidePanel
+// pero apuntando al contenedor #agenda-day-side-content
+function renderAgendaDaySidePanel(dateStr) {
+    const panel = document.getElementById('agenda-day-side-content');
+    if (!panel) return;
+    const cfg = getBusinessConfig();
+    const _today = new Date();
+    const todayStr = `${_today.getFullYear()}-${String(_today.getMonth()+1).padStart(2,'0')}-${String(_today.getDate()).padStart(2,'0')}`;
+
+    const [y, m, d] = dateStr.split('-').map(n => parseInt(n));
+    const dateObj = new Date(y, m - 1, d);
+    const dow = dateObj.getDay();
+    const dayNames = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
+    const monthNames = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+
+    let html = `<div style="font-weight:700;font-size:1rem;margin-bottom:.8rem;">${dayNames[dow]} ${d} ${monthNames[m-1]}</div>`;
+
     const dayHours = getBusinessHoursForDate(dateStr);
     const isClosed = dayHours.closed;
-    const isPastDate = dateStr < todayStr;
-
     if (isClosed) {
-        const closedBadge = document.createElement('div');
-        closedBadge.className = 'badge badge-border';
-        closedBadge.style.cssText = 'color:var(--danger);border-color:var(--danger);margin:1rem 1.5rem .5rem;';
-        closedBadge.textContent = 'Negocio cerrado este día';
-        timeline.appendChild(closedBadge);
+        html += `<div class="badge badge-border" style="color:var(--danger);border-color:var(--danger);margin-bottom:.8rem;">Negocio cerrado este día</div>`;
     }
 
+    // Citas
+    const apts = db.appointments
+        .filter(a => getAppointmentDate(a) === dateStr)
+        .sort((a, b) => getAppointmentTime(a).localeCompare(getAppointmentTime(b)));
+    html += `<h5 style="font-size:.75rem;color:var(--text-dim);text-transform:uppercase;margin:.8rem 0 .4rem;">Citas (${apts.length})</h5>`;
+    if (apts.length === 0) {
+        html += `<div style="color:var(--text-dim);font-size:.8rem;">Sin citas programadas.</div>`;
+    } else {
+        html += apts.map(a => `<div class="apt-chip" data-apt-id="${a.id}" style="padding:6px 10px;background:rgba(91,58,138,0.15);border-left:3px solid var(--violet-400);border-radius:4px;margin-bottom:4px;font-size:.82rem;cursor:pointer;transition:background .15s;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <div>
+                    <strong>${getAppointmentTime(a) || '--:--'}</strong> · ${a.clientName || a.client_name || 'Sin cliente'}<br>
+                    <span style="color:var(--text-dim);font-size:.72rem;">${a.service || 'Servicio s/e'}</span>
+                </div>
+                <div style="display:flex;gap:6px;">
+                    <button class="btn-icon apt-edit-btn" data-apt-id="${a.id}" title="Editar"><i data-lucide="pencil" style="width:14px;height:14px;color:var(--violet-300);"></i></button>
+                    <button class="btn-icon apt-del-btn" data-apt-id="${a.id}" title="Eliminar"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--danger);"></i></button>
+                </div>
+            </div>
+        </div>`).join('');
+    }
+
+    // Horarios disponibles
     if (!isClosed && dayHours.openTime && dayHours.closeTime) {
+        const slots = [];
         const toMin = t => { const [h, mn] = t.split(':').map(n => parseInt(n)); return h*60 + mn; };
         const toStr = mm => `${String(Math.floor(mm/60)).padStart(2,'0')}:${String(mm%60).padStart(2,'0')}`;
         const start = toMin(dayHours.openTime);
         const end = toMin(dayHours.closeTime);
         const blocks = (cfg.blockedSlots || []).filter(b => b.date === dateStr);
         const tempRes = (window.tempSlotReservation && window.tempSlotReservation.date === dateStr) ? window.tempSlotReservation.time : null;
-
+        const isPastDate = dateStr < todayStr;
         const activeEmps = db.employees || [];
         const maxConcurrent = activeEmps.length > 0 ? activeEmps.length : 1;
-        const slots = [];
 
         for (let t = start; t < end; t += 30) {
             const inBlock = blocks.some(b => t >= toMin(b.start) && t < toMin(b.end));
             const ts = toStr(t);
             const tempTaken = tempRes === ts;
-
             let totalBusyCount = 0;
             const busyEmpIds = [];
-            dayApts.forEach(a => {
+            apts.forEach(a => {
                 if (!getAppointmentTime(a)) return;
                 const sTime = toMin(getAppointmentTime(a));
                 const srv = db.services.find(s => s.name === a.service);
-                const dur = srv && srv.duration ? parseInt(srv.duration) : 30;
-                const eTime = sTime + dur;
+                const duration = srv && srv.duration ? parseInt(srv.duration) : 30;
+                const eTime = sTime + duration;
                 if (t >= sTime && t < eTime) {
                     totalBusyCount++;
                     const busyEmpId = getAppointmentEmployeeId(a);
                     if (busyEmpId) busyEmpIds.push(busyEmpId);
                 }
             });
-
-            if (!inBlock && !tempTaken && !isPastDate) {
-                if (totalBusyCount < maxConcurrent) {
-                    let bgColor = 'rgba(52,211,153,0.12)';
-                    let borderColor = 'rgba(52,211,153,0.3)';
-                    let textColor = 'var(--success)';
-                    if (totalBusyCount > 0 && activeEmps.length > 0) {
-                        const availableEmps = activeEmps.filter(e => !busyEmpIds.includes(e.id));
-                        if (availableEmps.length > 0 && availableEmps[0].color) {
-                            textColor = availableEmps[0].color;
-                            bgColor = availableEmps[0].color + '20';
-                            borderColor = availableEmps[0].color + '50';
-                        }
+            if (!inBlock && !tempTaken && !isPastDate && totalBusyCount < maxConcurrent) {
+                let bgColor = 'rgba(52,211,153,0.12)', borderColor = 'rgba(52,211,153,0.3)', textColor = 'var(--success)';
+                if (totalBusyCount > 0 && activeEmps.length > 0) {
+                    const availableEmps = activeEmps.filter(e => !busyEmpIds.includes(e.id));
+                    if (availableEmps.length > 0 && availableEmps[0].color) {
+                        textColor = availableEmps[0].color;
+                        bgColor = availableEmps[0].color + '20';
+                        borderColor = availableEmps[0].color + '50';
                     }
-                    slots.push({ time: ts, bgColor, borderColor, textColor });
                 }
+                slots.push({ time: ts, bgColor, borderColor, textColor });
             }
         }
-
-        const slotsWrapper = document.createElement('div');
-        slotsWrapper.style.cssText = 'padding:0 1.5rem 1.5rem;';
-        slotsWrapper.innerHTML = `<h4 style="font-size:.8rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;margin:1.2rem 0 .6rem;font-weight:700;">Horarios disponibles <span style="color:var(--success);font-weight:600;">(${slots.length})</span></h4>`;
-
+        html += `<h5 style="font-size:.8rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;margin:1.2rem 0 .6rem;font-weight:700;">Horarios disponibles <span style="color:var(--success);font-weight:600;">(${slots.length})</span></h5>`;
         if (slots.length === 0) {
-            slotsWrapper.innerHTML += `<div style="color:var(--text-dim);font-size:.85rem;padding:.5rem;background:rgba(255,255,255,.03);border-radius:6px;text-align:center;">${isPastDate ? 'Fecha pasada.' : 'Sin huecos libres.'}</div>`;
+            html += `<div style="color:var(--text-dim);font-size:.85rem;padding:.5rem;background:rgba(255,255,255,.03);border-radius:6px;text-align:center;">${isPastDate ? 'Fecha pasada.' : 'Sin huecos libres.'}</div>`;
         } else {
-            slotsWrapper.innerHTML += `<div class="slots-grid">${slots.map(s =>
+            html += `<div class="slots-grid">${slots.map(s =>
                 `<button type="button" class="slot-btn" data-slot-date="${dateStr}" data-slot-time="${s.time}" style="background:${s.bgColor};border-color:${s.borderColor};color:${s.textColor};">${s.time}</button>`
             ).join('')}</div>`;
         }
-        timeline.appendChild(slotsWrapper);
-
-        // Listeners: click en slot → abrir modal agendar
-        slotsWrapper.querySelectorAll('.slot-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const d = btn.dataset.slotDate;
-                const t = btn.dataset.slotTime;
-                window.tempSlotReservation = { date: d, time: t };
-                aptCurrentClient = null;
-                openAgendarModal(d, t);
-                renderAgenda(dateStr);
-            });
-        });
     }
 
+    // Cumpleaños
+    const bdays = db.clients.filter(c => {
+        if (!c.birthday) return false;
+        const [, bm, bd] = c.birthday.split('-').map(n => parseInt(n));
+        return bm === m && bd === d;
+    });
+    if (bdays.length > 0) {
+        html += `<h5 style="font-size:.75rem;color:var(--text-dim);text-transform:uppercase;margin:1rem 0 .4rem;">🎂 Cumpleaños</h5>`;
+        html += bdays.map(c => `<div style="font-size:.82rem;padding:4px 0;">${c.name}</div>`).join('');
+    }
+
+    // Deudas pendientes
+    const debtors = db.clients.filter(c => parseFloat(c.debt) > 0);
+    if (debtors.length > 0) {
+        html += `<h5 style="font-size:.75rem;color:var(--danger);text-transform:uppercase;margin:1rem 0 .4rem;">⚠ Deudas pendientes</h5>`;
+        html += debtors.slice(0, 5).map(c => {
+            const debtTx = db.transactions.filter(t => t.clientId == c.id && t.isIncome && /deuda/i.test(t.detail)).sort((a, b) => new Date(a.date) - new Date(b.date))[0];
+            const debtDate = debtTx ? new Date(debtTx.date).toLocaleDateString('es-UY', {day:'2-digit', month:'2-digit'}) : '';
+            return `<div style="display:flex;justify-content:space-between;align-items:center;font-size:.78rem;padding:5px 0;border-bottom:1px solid var(--border-subtle);">
+                <div>
+                    <span style="cursor:pointer;color:var(--text-primary);" onclick="openClientModal('${c.id}')">${c.name}</span>
+                    ${debtDate ? `<div style="font-size:.65rem;color:var(--text-dim);">desde ${debtDate}</div>` : ''}
+                </div>
+                <span style="color:var(--danger);font-weight:700;">$${c.debt}</span>
+            </div>`;
+        }).join('');
+        if (debtors.length > 5) html += `<div style="font-size:.7rem;color:var(--text-dim);margin-top:4px;">+${debtors.length - 5} más...</div>`;
+    }
+
+    panel.innerHTML = html;
+
+    // Listeners: editar/eliminar citas
+    panel.querySelectorAll('.apt-edit-btn, .apt-chip').forEach(el => {
+        el.addEventListener('click', (ev) => {
+            if (ev.target.closest('.apt-del-btn')) return;
+            ev.stopPropagation();
+            const id = el.dataset.aptId;
+            if (id) editAppointment(id);
+        });
+    });
+    panel.querySelectorAll('.apt-del-btn').forEach(btn => {
+        btn.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            const id = btn.dataset.aptId;
+            const apt = db.appointments.find(a => String(a.id) === String(id));
+            if (!apt) return;
+            const ok = await showCustomConfirm(
+                `¿Eliminar la cita de ${apt.clientName || apt.client_name} el ${getAppointmentDate(apt)} a las ${getAppointmentTime(apt)}?`,
+                { title: 'Eliminar cita', confirmText: 'Eliminar', danger: true }
+            );
+            if (!ok) return;
+            const { error } = await window.supabaseClient.from('appointments').delete().eq('id', id);
+            if (error) { console.error(error); showToast('Error eliminando cita: ' + error.message, 'error'); return; }
+            db.appointments = db.appointments.filter(a => String(a.id) !== String(id));
+            showToast('Cita eliminada');
+            renderAgenda(dateStr);
+        });
+    });
+
+    // Listeners: click en slot → abrir modal agendar
+    panel.querySelectorAll('.slot-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const d2 = btn.dataset.slotDate;
+            const t2 = btn.dataset.slotTime;
+            window.tempSlotReservation = { date: d2, time: t2 };
+            aptCurrentClient = null;
+            openAgendarModal(d2, t2);
+            renderAgenda(dateStr);
+        });
+    });
     refreshIcons();
 }
 
@@ -3497,7 +3573,7 @@ function openClientModal(clientId = null) {
             if (balanceVal > 0 || debtVal > 0) {
                 bBadge.classList.remove('hidden');
                 if (balanceVal > 0) {
-                    bBadge.textContent = `Saldo a favor (Seña): $${fmt(balanceVal)}`;
+                    bBadge.innerHTML = `Saldo a favor (Seña): $${fmt(balanceVal)}`;
                     bBadge.style.color = 'var(--info)';
                     bBadge.style.borderColor = 'var(--info)';
                 } else {
@@ -3510,9 +3586,14 @@ function openClientModal(clientId = null) {
                         });
                         debtInfo += ` (Generada: ${[...new Set(debtDates)].join(', ')})`;
                     }
-                    bBadge.textContent = debtInfo;
+                    bBadge.innerHTML = `<span style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">${debtInfo} <button type="button" class="btn-cancel-debt" data-client-id="${c.id}" style="background:none;border:1px solid var(--success);color:var(--success);padding:2px 10px;border-radius:4px;font-size:.7rem;font-weight:700;cursor:pointer;transition:all .15s;">Cancelar deuda</button></span>`;
                     bBadge.style.color = 'var(--danger)';
                     bBadge.style.borderColor = 'var(--danger)';
+                    // Listener para cancelar deuda
+                    setTimeout(() => {
+                        const cancelBtn = bBadge.querySelector('.btn-cancel-debt');
+                        if (cancelBtn) cancelBtn.addEventListener('click', () => cancelClientDebt(c.id));
+                    }, 0);
                 }
                 bBadge.className = 'badge badge-border';
             }
@@ -3622,6 +3703,80 @@ async function deleteClient(clientId) {
     } catch (err) {
         console.error('[DeleteClient]', err);
         showToast('Error al eliminar: ' + (err.message || err), 'error');
+    }
+}
+
+// Cancelar deuda de una clienta — registra movimiento del día
+async function cancelClientDebt(clientId) {
+    const client = db.clients.find(c => c.id == clientId);
+    if (!client || !(parseFloat(client.debt) > 0)) return;
+
+    const debtAmount = parseFloat(client.debt);
+    const ok = await showCustomConfirm(
+        `¿Cancelar la deuda de $${fmt(debtAmount)} de "${client.name}"?\n\nSe registrará como movimiento del día de hoy.`,
+        { title: 'Cancelar deuda', confirmText: 'Cancelar deuda', danger: false }
+    );
+    if (!ok) return;
+
+    try {
+        // 1. Registrar transacción de cancelación de deuda
+        const now = new Date();
+        const txData = withCurrentUser({
+            transaction_date: now.toISOString(),
+            is_income: true,
+            amount: debtAmount,
+            client_name: client.name,
+            client_id: client.id,
+            detail: `Cancelación de deuda — ${client.name}`,
+            method: 'efectivo',
+            employee: '',
+            employee_id: null
+        });
+
+        const userId = getUserId();
+        if (userId) txData.user_id = userId;
+
+        if (window.supabaseClient) {
+            const { data, error } = await window.supabaseClient.from('transactions').insert([txData]).select();
+            if (error) {
+                // Retry sin columna inexistente
+                const m = error.message?.match(/Could not find the '(\w+)' column/i);
+                if (m && m[1]) {
+                    delete txData[m[1]];
+                    const retry = await window.supabaseClient.from('transactions').insert([txData]).select();
+                    if (retry.error) { showToast('Error: ' + retry.error.message, 'error'); return; }
+                    if (retry.data?.[0]) db.transactions.push({ ...retry.data[0], clientId: client.id, isIncome: true, date: retry.data[0].transaction_date });
+                } else {
+                    showToast('Error: ' + error.message, 'error');
+                    return;
+                }
+            } else if (data?.[0]) {
+                db.transactions.push({ ...data[0], clientId: client.id, isIncome: true, date: data[0].transaction_date });
+            }
+        } else {
+            const localTx = { ...txData, id: createLocalId('tx'), clientId: client.id, isIncome: true, date: txData.transaction_date };
+            db.transactions.push(localTx);
+        }
+        persistCollectionLocal('transactions', db.transactions);
+
+        // 2. Poner deuda en 0
+        client.debt = 0;
+        if (!String(client.id).startsWith('client_') && window.supabaseClient) {
+            await updateClientSafe(client.id, { debt: 0 });
+        }
+        persistCollectionLocal('clients', db.clients);
+
+        // 3. Log
+        addClientLog(clientId, `✅ Deuda cancelada: $${fmt(debtAmount)}`);
+
+        // 4. Refresh UI
+        showToast(`Deuda de $${fmt(debtAmount)} cancelada — registrada como movimiento de hoy`, 'success');
+        openClientModal(clientId); // refresca la ficha
+        if (currentView === 'caja') updateStats();
+        if (currentView === 'dashboard') initDashboard();
+    } catch (err) {
+        console.error('[CancelDebt]', err);
+        showToast('Error cancelando deuda: ' + (err.message || err), 'error');
     }
 }
 
