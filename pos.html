@@ -210,9 +210,17 @@
                     </div>
                 </div>
 
-                <!-- Vista Día (timeline) -->
-                <div class="agenda-timeline" id="agenda-timeline">
-                    <!-- JS rellena las horas y tarjetas -->
+                <!-- Vista Día (timeline + side panel) -->
+                <div id="agenda-day-view" style="padding:1rem 1.5rem 1.5rem;">
+                    <div style="display:grid;grid-template-columns: 2fr 1fr; gap:1.5rem;" id="agenda-day-layout">
+                        <div class="agenda-timeline" id="agenda-timeline">
+                            <!-- JS rellena las tarjetas de citas -->
+                        </div>
+                        <aside id="agenda-day-side-panel" style="background:rgba(0,0,0,0.2);border-radius:var(--radius);padding:1rem;min-height:400px;">
+                            <h4 style="margin:0 0 .8rem 0;font-size:.85rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;">Resumen del día</h4>
+                            <div id="agenda-day-side-content"></div>
+                        </aside>
+                    </div>
                 </div>
 
                 <!-- Vista Mes (grid + side panel) -->
@@ -318,7 +326,7 @@
                             <label for="amount">Monto Recibido ($)</label>
                             <div class="input-wrap">
                                 <i data-lucide="dollar-sign"></i>
-                                <input type="number" id="amount" placeholder="0" min="0" step="0.01" required>
+                                <input type="number" id="amount" placeholder="0" min="0" step="1" onwheel="this.blur()" required>
                             </div>
                         </div>
 
@@ -386,7 +394,7 @@
                             <label for="expense-amount">Monto Saliente ($)</label>
                             <div class="input-wrap">
                                 <i data-lucide="dollar-sign"></i>
-                                <input type="number" id="expense-amount" placeholder="0" min="1" step="0.01">
+                                <input type="number" id="expense-amount" placeholder="0" min="1" step="1" onwheel="this.blur()">
                             </div>
                         </div>
                     </div>
@@ -428,7 +436,7 @@
                             <label>2do Monto ($)</label>
                             <div class="input-wrap">
                                 <i data-lucide="dollar-sign"></i>
-                                <input type="number" id="split-amount" placeholder="0" min="0" step="0.01">
+                                <input type="number" id="split-amount" placeholder="0" min="0" step="1" onwheel="this.blur()">
                             </div>
                         </div>
                         <div class="form-group">
@@ -456,7 +464,7 @@
                                 <label>Monto propina ($)</label>
                                 <div class="input-wrap">
                                     <i data-lucide="coins"></i>
-                                    <input type="number" id="tip-amount" placeholder="0" min="0" step="0.01">
+                                    <input type="number" id="tip-amount" placeholder="0" min="0" step="1" onwheel="this.blur()">
                                 </div>
                             </div>
                             <div class="form-group" style="margin:0;">
@@ -495,7 +503,7 @@
                             <label for="full-service-price" style="color:var(--text-primary)">¿Cuánto queda debiendo? ($)</label>
                             <div class="input-wrap">
                                 <i data-lucide="minus-circle"></i>
-                                <input type="number" id="full-service-price" placeholder="Ej: 500" min="1" step="0.01">
+                                <input type="number" id="full-service-price" placeholder="Ej: 500" min="1" step="1" onwheel="this.blur()">
                             </div>
                             <p style="font-size:0.75rem; color:var(--text-dim); margin-top:0.4rem;">
                                 El monto ingresado se registrará como deuda pendiente.
@@ -581,11 +589,11 @@
         <!-- ═══════════ VIEW: ANALYTICS ═══════════ -->
         <section class="view-section" id="view-analytics">
             <div class="analytics-tabs" style="margin-bottom: 1.5rem; display:flex; gap: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem;">
-                <button class="tab-btn active" data-tab="stats-main" style="background:none; border:none; color:var(--text-dim); padding:8px 16px; cursor:pointer; font-weight:600; font-size:0.9rem;" onclick="switchAnalyticsTab('stats-main')">Estadísticas</button>
-                <button class="tab-btn" data-tab="stats-closures" style="background:none; border:none; color:var(--text-dim); padding:8px 16px; cursor:pointer; font-weight:600; font-size:0.9rem;" onclick="switchAnalyticsTab('stats-closures')">Historial de Cierres</button>
+                <button class="tab-btn active" data-tab="stats-closures" style="background:none; border:none; color:var(--text-dim); padding:8px 16px; cursor:pointer; font-weight:600; font-size:0.9rem;" onclick="switchAnalyticsTab('stats-closures')">Historial de Cierres</button>
+                <button class="tab-btn" data-tab="stats-main" style="background:none; border:none; color:var(--text-dim); padding:8px 16px; cursor:pointer; font-weight:600; font-size:0.9rem;" onclick="switchAnalyticsTab('stats-main')">Estadísticas</button>
             </div>
 
-            <div id="tab-stats-main" class="tab-content active">
+            <div id="tab-stats-main" class="tab-content hidden">
                 <div class="stats-grid">
                     <!-- Stats summary cards -->
                     <div class="stat-card">
@@ -629,7 +637,7 @@
                 </div>
             </div>
 
-            <div id="tab-stats-closures" class="tab-content hidden">
+            <div id="tab-stats-closures" class="tab-content active">
                 <div class="card">
                     <div class="card-header">
                         <h2 class="card-title"><i data-lucide="archive"></i> Registros de Cierre de Caja</h2>
@@ -656,44 +664,15 @@
             </div>
         </section>
 
-        <!-- ═══════════ VIEW: CONFIGURACIÓN ═══════════ -->
+        <!-- ═══════════ VIEW: STAFF ═══════════ -->
         <section class="view-section" id="view-staff">
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-label">Funcionarias</div>
-                    <div class="stat-value" id="staff-total-count">0</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Propinas Acumuladas</div>
-                    <div class="stat-value" id="staff-total-tips">$0</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Adelantos</div>
-                    <div class="stat-value" id="staff-total-advances">$0</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Bloqueos Activos</div>
-                    <div class="stat-value" id="staff-total-blocks">0</div>
-                </div>
-            </div>
-
             <div class="card">
-                <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
+                <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
                     <h2 class="card-title"><i data-lucide="users"></i> Panel de Staff</h2>
                     <button class="btn btn-primary btn-sm" onclick="openEmployeeModal()"><i data-lucide="plus"></i> Nuevo Staff</button>
                 </div>
                 <div class="card-body" style="padding:1.5rem;">
-                    <ul class="task-list" id="staff-employees-list"></ul>
-                </div>
-            </div>
-
-            <div class="card" style="margin-top:1.5rem;">
-                <div class="card-header">
-                    <h2 class="card-title"><i data-lucide="calendar-x"></i> Horarios Bloqueados</h2>
-                </div>
-                <div class="card-body" style="padding:1.5rem;">
-                    <p style="font-size:0.85rem;color:var(--text-dim);margin-top:0;">Los bloqueos se gestionan desde Configuración de Agenda y afectan la disponibilidad al agendar citas.</p>
-                    <ul id="staff-blocked-list" class="task-list"></ul>
+                    <ul id="staff-employees-list"></ul>
                 </div>
             </div>
         </section>
@@ -1037,7 +1016,7 @@
                                 <input type="text" id="cm-phone" placeholder="Teléfono o WhatsApp">
                             </div>
                             <div class="input-wrap">
-                                <i data-lucide="instagram"></i>
+                                <i data-lucide="at-sign"></i>
                                 <input type="text" id="cm-ig" placeholder="Usuario de Instagram">
                             </div>
                         </div>
@@ -1078,7 +1057,11 @@
                     </div>
                 </div>
 
-                <div class="modal-footer">
+                <div class="modal-footer" style="display:flex;justify-content:space-between;align-items:center;">
+                    <button type="button" class="btn btn-danger btn-sm hidden" id="btn-delete-client" style="gap:4px;">
+                        <i data-lucide="trash-2" style="width:14px;height:14px;"></i>
+                        <span>Eliminar</span>
+                    </button>
                     <button type="button" class="btn btn-primary" id="btn-save-client">
                         <i data-lucide="save"></i>
                         <span>Guardar Perfil</span>
@@ -1152,6 +1135,152 @@
                         <button type="submit" class="btn btn-primary" style="width: 100%;">
                             <i data-lucide="save"></i>
                             <span>Guardar Perfil</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Registrar Propina -->
+    <div class="modal-overlay" id="modal-staff-tip">
+        <div class="modal" style="max-width: 420px;">
+            <div class="modal-header">
+                <h2><i data-lucide="heart" style="color:var(--gold-400);"></i> Registrar Propina</h2>
+                <button class="modal-close-btn" data-close="modal-staff-tip"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <p style="color:var(--text-dim);font-size:0.85rem;margin:0 0 1rem 0;">Para: <strong id="staff-tip-target" style="color:var(--text-primary);"></strong></p>
+                <form id="fm-staff-tip">
+                    <input type="hidden" id="staff-tip-emp-id">
+                    <div class="form-group">
+                        <label for="staff-tip-amount">Monto de propina ($)</label>
+                        <div class="input-wrap">
+                            <i data-lucide="heart"></i>
+                            <input type="number" id="staff-tip-amount" placeholder="0" min="1" step="1" onwheel="this.blur()" required>
+                        </div>
+                    </div>
+                    <div class="modal-footer" style="margin-top:1.5rem;">
+                        <button type="submit" class="btn btn-primary" style="width:100%;">
+                            <i data-lucide="check"></i> Registrar propina
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Cargar Adelanto -->
+    <div class="modal-overlay" id="modal-staff-advance">
+        <div class="modal" style="max-width: 420px;">
+            <div class="modal-header">
+                <h2><i data-lucide="banknote" style="color:var(--danger);"></i> Cargar Adelanto</h2>
+                <button class="modal-close-btn" data-close="modal-staff-advance"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <p style="color:var(--text-dim);font-size:0.85rem;margin:0 0 1rem 0;">Para: <strong id="staff-advance-target" style="color:var(--text-primary);"></strong></p>
+                <form id="fm-staff-advance">
+                    <input type="hidden" id="staff-advance-emp-id">
+                    <div class="form-group">
+                        <label for="staff-advance-amount">Monto del adelanto ($)</label>
+                        <div class="input-wrap">
+                            <i data-lucide="trending-down"></i>
+                            <input type="number" id="staff-advance-amount" placeholder="0" min="1" step="1" onwheel="this.blur()" required>
+                        </div>
+                    </div>
+                    <div class="modal-footer" style="margin-top:1.5rem;">
+                        <button type="submit" class="btn btn-primary" style="width:100%;">
+                            <i data-lucide="check"></i> Cargar adelanto
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Bloquear Horario -->
+    <div class="modal-overlay" id="modal-staff-block">
+        <div class="modal" style="max-width: 520px;">
+            <div class="modal-header">
+                <h2><i data-lucide="calendar-x" style="color:var(--violet-200);"></i> Bloquear horarios</h2>
+                <button class="modal-close-btn" data-close="modal-staff-block"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <p style="color:var(--text-dim);font-size:0.85rem;margin:0 0 1rem 0;">Staff: <strong id="staff-block-target" style="color:var(--text-primary);"></strong></p>
+                <form id="fm-staff-block">
+                    <input type="hidden" id="staff-block-emp-id">
+
+                    <div class="form-group">
+                        <label>Tipo de bloqueo</label>
+                        <div class="block-type-grid">
+                            <label class="block-type-option">
+                                <input type="radio" name="staff-block-type" value="full-day" checked>
+                                <span><i data-lucide="calendar"></i> Día completo</span>
+                            </label>
+                            <label class="block-type-option">
+                                <input type="radio" name="staff-block-type" value="time-range">
+                                <span><i data-lucide="clock"></i> Horario específico</span>
+                            </label>
+                            <label class="block-type-option">
+                                <input type="radio" name="staff-block-type" value="date-range">
+                                <span><i data-lucide="calendar-range"></i> Varios días</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div id="staff-block-section-date" class="form-group" style="margin-top:1rem;">
+                        <label for="staff-block-date">Fecha</label>
+                        <div class="input-wrap">
+                            <i data-lucide="calendar"></i>
+                            <input type="date" id="staff-block-date" required>
+                        </div>
+                    </div>
+
+                    <div id="staff-block-section-time" class="form-grid" style="display:none;grid-template-columns:1fr 1fr;margin-top:1rem;padding:0;">
+                        <div class="form-group">
+                            <label for="staff-block-start">Hora inicio</label>
+                            <div class="input-wrap">
+                                <i data-lucide="clock"></i>
+                                <input type="time" id="staff-block-start" value="09:00">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="staff-block-end">Hora fin</label>
+                            <div class="input-wrap">
+                                <i data-lucide="clock"></i>
+                                <input type="time" id="staff-block-end" value="18:00">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="staff-block-section-daterange" class="form-grid" style="display:none;grid-template-columns:1fr 1fr;margin-top:1rem;padding:0;">
+                        <div class="form-group">
+                            <label for="staff-block-date-from">Desde</label>
+                            <div class="input-wrap">
+                                <i data-lucide="calendar"></i>
+                                <input type="date" id="staff-block-date-from">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="staff-block-date-to">Hasta</label>
+                            <div class="input-wrap">
+                                <i data-lucide="calendar"></i>
+                                <input type="date" id="staff-block-date-to">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group" style="margin-top:1rem;">
+                        <label for="staff-block-reason">Motivo (opcional)</label>
+                        <div class="input-wrap">
+                            <i data-lucide="message-circle"></i>
+                            <input type="text" id="staff-block-reason" placeholder="Ej: Vacaciones, día libre, capacitación...">
+                        </div>
+                    </div>
+
+                    <div class="modal-footer" style="margin-top:1.5rem;">
+                        <button type="submit" class="btn btn-primary" style="width:100%;">
+                            <i data-lucide="calendar-x"></i> Confirmar bloqueo
                         </button>
                     </div>
                 </form>
@@ -1280,7 +1409,7 @@
                 </div>
                 <div class="form-group" style="margin-top:1rem;">
                     <label>Instagram</label>
-                    <div class="input-wrap"><i data-lucide="instagram"></i><input type="text" id="qc-ig" placeholder="@usuario"></div>
+                    <div class="input-wrap"><i data-lucide="at-sign"></i><input type="text" id="qc-ig" placeholder="@usuario"></div>
                 </div>
             </div>
             <div class="modal-footer">
@@ -1483,7 +1612,7 @@
     <script src="pos.js?v=202605151230"></script>
     <script src="pos.dashboard.js?v=202605151230"></script>
     <script src="pos.services.js?v=202604260900"></script>
-    <script src="pos.config.js?v=202605131745"></script>
+    <script src="pos.config.js?v=202605140600"></script>
     <!-- Modal: Cierre de Caja (Formulario) -->
     <div class="modal-overlay" id="modal-closure">
         <div class="modal" style="max-width: 480px;">

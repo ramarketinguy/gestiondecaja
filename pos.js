@@ -48,6 +48,13 @@ function withCurrentUser(payload) {
     return payload;
 }
 
+// Formateador monetario global (varias funciones locales lo redefinen, lo que es OK).
+// Las funciones que NO lo redefinen (renderEmployeesList, renderStaffCards) usan éste.
+function fmt(n) {
+    return Number(n || 0).toLocaleString('es-UY', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
+window.fmt = fmt;
+
 function getAppointmentDate(apt) {
     return apt?.date || apt?.apt_date || '';
 }
@@ -154,6 +161,48 @@ function violetInit() {
     _violetInitDone = true;
     console.log('[VIOLET] violetInit() ejecutado');
 
+    // 0. Sembrar db.employees desde localStorage si está vacío y limpiar duplicados ANTES de poblar selects
+    try {
+        if (Array.isArray(db.employees) && db.employees.length === 0) {
+            const snap = (typeof getLocalDataSnapshot === 'function') ? getLocalDataSnapshot() : {};
+            if (Array.isArray(snap.employees) && snap.employees.length > 0) {
+                db.employees = snap.employees;
+            }
+        }
+        if (typeof dedupeEmployees === 'function' && db.employees.length > 1) {
+            // Dedupe síncrono (sin await): solo procesa locales para evitar parpadeo;
+            // dedupe completo (con Supabase) corre tras loadDataFromSupabase
+            const before = db.employees.length;
+            const groups = new Map();
+            db.employees.forEach(emp => {
+                if (!emp || !emp.name) return;
+                const key = String(emp.name).trim().toLowerCase();
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key).push(emp);
+            });
+            const keepers = [];
+            for (const group of groups.values()) {
+                if (group.length === 1) { keepers.push(group[0]); continue; }
+                group.sort((a, b) => (String(a.id).startsWith('emp_') ? 1 : 0) - (String(b.id).startsWith('emp_') ? 1 : 0));
+                const keeper = group[0];
+                group.slice(1).forEach(loser => {
+                    keeper.tips = Math.max(parseFloat(keeper.tips) || 0, parseFloat(loser.tips) || 0);
+                    keeper.advances = Math.max(parseFloat(keeper.advances) || 0, parseFloat(loser.advances) || 0);
+                    keeper.payDay = keeper.payDay || keeper.pay_day || loser.payDay || loser.pay_day || null;
+                    keeper.joinDate = keeper.joinDate || keeper.join_date || loser.joinDate || loser.join_date || null;
+                });
+                keepers.push(keeper);
+            }
+            if (keepers.length !== before) {
+                db.employees = keepers;
+                if (typeof persistCollectionLocal === 'function') persistCollectionLocal('employees', keepers);
+                console.log(`[VIOLET] Dedupe inicial: ${before} → ${keepers.length} empleadas.`);
+            }
+        }
+    } catch (e) {
+        console.warn('[VIOLET] Dedupe inicial falló:', e);
+    }
+
     try {
         // 1. Mostrar fecha
         const sidebarDate = document.getElementById('sidebar-date');
@@ -179,6 +228,7 @@ function violetInit() {
         if (typeof initAnalytics === 'function') initAnalytics();
         if (typeof initSettings === 'function') initSettings();
         if (typeof renderStaffPanel === 'function') renderStaffPanel();
+        if (typeof initStaffModals === 'function') initStaffModals();
         if (typeof initAIChat === 'function') initAIChat();
         if (typeof checkBirthdayAlert === 'function') checkBirthdayAlert();
 
@@ -361,13 +411,9 @@ async function loadDataFromSupabase() {
                 error = retry.error;
             }
 
-            if (!error && userId && Array.isArray(data) && data.length === 0 && ['clients', 'services', 'products', 'employees', 'appointments', 'transactions', 'tasks'].includes(table.name)) {
-                console.warn(`[SYNC] ${table.name}: sin filas con user_id. Reintentando lectura legacy sin filtro.`);
-                let legacyQuery = client.from(table.name).select('*');
-                if (table.order) legacyQuery = legacyQuery.order(table.order.col, { ascending: table.order.asc });
-                const legacy = await legacyQuery;
-                if (!legacy.error && Array.isArray(legacy.data) && legacy.data.length > 0) data = legacy.data;
-            }
+            // NOTA: previamente había un fallback "legacy" que recargaba sin filtro user_id
+            // cuando data.length === 0. Se eliminó porque cargaba filas de OTROS user_ids
+            // (data leak cross-account) y causaba duplicados visibles en el dropdown.
 
             if (error) {
                 console.warn(`⚠️ Error en ${table.name}:`, error.message);
@@ -385,7 +431,8 @@ async function loadDataFromSupabase() {
                 // Usa db desde state.js actualizando ahí
                 db[table.stateKey] = table.transform ? data.map(table.transform) : data;
                 const localRows = getLocalDataSnapshot()[table.stateKey];
-                db[table.stateKey] = mergeCloudAndLocalRows(db[table.stateKey], localRows);
+                const dedupeByName = ['employees', 'services'].includes(table.name);
+                db[table.stateKey] = mergeCloudAndLocalRows(db[table.stateKey], localRows, { dedupeByName });
                 state.data = db; // sincroniza alias
                 persistCollectionLocal(table.stateKey, db[table.stateKey]);
                 console.log(`✅ ${table.name}: ${data.length} registros cargados.`);
@@ -397,12 +444,16 @@ async function loadDataFromSupabase() {
     }
 
     if (successCount > 0) {
+        // Limpiar duplicados de empleadas que puedan haber quedado por bugs previos
+        try { if (typeof dedupeEmployees === 'function') await dedupeEmployees({ silent: true }); } catch (_) {}
         if (typeof initDashboard === 'function') initDashboard();
         if (typeof renderServicesList === 'function') renderServicesList();
         if (typeof renderProductsList === 'function') renderProductsList();
         if (typeof renderEmployeesList === 'function') renderEmployeesList();
         if (typeof updateFormSelects === 'function') updateFormSelects();
         if (typeof renderStaffPanel === 'function') renderStaffPanel();
+        if (typeof initAgendaHandlers === 'function') initAgendaHandlers();
+        if (typeof initDashboard === 'function') initDashboard();
     } else {
         console.error("No se pudo cargar ninguna tabla. Revisa las políticas de RLS en Supabase o si los datos tienen el user_id correcto.");
         showToast('Sin acceso a datos en la nube', 'error');
@@ -440,13 +491,22 @@ function persistCollectionLocal(collection, records) {
     saveLocalDataSnapshot(snapshot);
 }
 
-function mergeCloudAndLocalRows(cloudRows, localRows) {
+function mergeCloudAndLocalRows(cloudRows, localRows, opts = {}) {
     const merged = Array.isArray(cloudRows) ? [...cloudRows] : [];
     if (!Array.isArray(localRows)) return merged;
+    const dedupeByName = opts.dedupeByName === true;
     localRows.forEach(localRow => {
         if (!localRow || localRow.deleted) return;
-        const exists = merged.some(cloudRow => String(cloudRow.id) === String(localRow.id));
-        if (!exists) merged.push(localRow);
+        const existsById = merged.some(cloudRow => String(cloudRow.id) === String(localRow.id));
+        if (existsById) return;
+        // Para colecciones con nombres únicos (employees, services), si ya existe una fila
+        // cloud con el mismo nombre, no agregar el local — es duplicado por ID stale.
+        if (dedupeByName && localRow.name) {
+            const localName = String(localRow.name).trim().toLowerCase();
+            const sameName = merged.some(c => c && c.name && String(c.name).trim().toLowerCase() === localName);
+            if (sameName) return;
+        }
+        merged.push(localRow);
     });
     return merged;
 }
@@ -635,14 +695,25 @@ function initNavigation() {
         else if (viewId === 'caja') { updateStats(); renderTransactionsTable(); }
         else if (viewId === 'clients') renderClientsTable();
         else if (viewId === 'staff') renderStaffPanel();
-        else if (viewId === 'analytics') updateCharts();
+        else if (viewId === 'agenda') {
+            const picker = document.getElementById('agenda-date-picker');
+            if (typeof renderAgenda === 'function') renderAgenda(picker?.value);
+            else if (typeof renderAgendaMonth === 'function') renderAgendaMonth();
+        }
+        else if (viewId === 'analytics') {
+            // El tab activo por defecto es "Historial de Cierres". Renderizamos
+            // ambos contenidos (cierres + stats) y dejamos visible el activo.
+            if (typeof renderClosuresHistory === 'function') renderClosuresHistory();
+            updateCharts();
+        }
     }
 
     // Botón cerrar sesión
     const closeBtn = document.getElementById('btn-close-register');
     if (closeBtn) {
         closeBtn.addEventListener('click', async () => {
-            if (confirm('¿Cerrar sesión?')) {
+            const ok = await showCustomConfirm('¿Cerrar sesión?', { title: 'Cerrar sesión', confirmText: 'Cerrar sesión' });
+            if (ok) {
                 await window.supabaseClient.auth.signOut();
                 resetState();
                 window.location.href = 'index.html';
@@ -872,11 +943,11 @@ function initAgenda() {
                 btn.style.background = 'var(--violet-600)';
                 btn.style.color = '#fff';
                 const view = btn.dataset.view;
-                const timeline = document.getElementById('agenda-timeline');
+                const dayView = document.getElementById('agenda-day-view');
                 const monthView = document.getElementById('agenda-month-view');
                 const picker = document.getElementById('agenda-date-picker');
                 if (view === 'month') {
-                    timeline.classList.add('hidden');
+                    dayView.classList.add('hidden');
                     monthView.classList.remove('hidden');
                     const [y, m] = picker.value.split('-').map(n => parseInt(n));
                     agendaMonthState.year = y;
@@ -884,7 +955,7 @@ function initAgenda() {
                     agendaMonthState.selectedDate = picker.value;
                     renderAgendaMonth();
                 } else {
-                    timeline.classList.remove('hidden');
+                    dayView.classList.remove('hidden');
                     monthView.classList.add('hidden');
                     renderAgenda(picker.value);
                 }
@@ -1195,8 +1266,9 @@ async function saveAppointment() {
     if (!dateInput) { showToast('Seleccioná una fecha', 'error'); return; }
     if (!timeInput) { showToast('Seleccioná una hora', 'error'); return; }
 
-    // No permitir fechas pasadas
-    const todayStr = new Date().toISOString().slice(0, 10);
+    // No permitir fechas pasadas (LOCAL, no UTC)
+    const _today = new Date();
+    const todayStr = `${_today.getFullYear()}-${String(_today.getMonth()+1).padStart(2,'0')}-${String(_today.getDate()).padStart(2,'0')}`;
     if (dateInput < todayStr) {
         showToast('No se puede agendar en una fecha pasada', 'error');
         return;
@@ -1405,7 +1477,9 @@ function renderAgendaMonth() {
     const daysInMonth = lastDay.getDate();
 
     const cfg = getBusinessConfig();
-    const todayStr = new Date().toISOString().slice(0, 10);
+    // Fecha LOCAL para que el calendario destaque "hoy" correctamente en la zona horaria del usuario
+    const _today = new Date();
+    const todayStr = `${_today.getFullYear()}-${String(_today.getMonth()+1).padStart(2,'0')}-${String(_today.getDate()).padStart(2,'0')}`;
 
     // Cabecera de días de la semana
     const weekNames = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
@@ -1473,7 +1547,10 @@ function renderAgendaSidePanel(dateStr) {
     const panel = document.getElementById('agenda-side-content');
     if (!panel) return;
     const cfg = getBusinessConfig();
-    const todayStr = new Date().toISOString().slice(0, 10); // fix: defined locally
+    // Fecha LOCAL (no UTC). Antes el toISOString() usaba UTC y marcaba hoy
+    // como "fecha pasada" después de las 21h (UY UTC-3).
+    const _today = new Date();
+    const todayStr = `${_today.getFullYear()}-${String(_today.getMonth()+1).padStart(2,'0')}-${String(_today.getDate()).padStart(2,'0')}`;
 
     const [y, m, d] = dateStr.split('-').map(n => parseInt(n));
     const dateObj = new Date(y, m - 1, d);
@@ -1573,12 +1650,12 @@ function renderAgendaSidePanel(dateStr) {
                 }
             }
         }
-        html += `<h5 style="font-size:.75rem;color:var(--text-dim);text-transform:uppercase;margin:1rem 0 .4rem;">Horarios disponibles</h5>`;
+        html += `<h5 style="font-size:.8rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;margin:1.2rem 0 .6rem;font-weight:700;">Horarios disponibles <span style="color:var(--success);font-weight:600;">(${slots.length})</span></h5>`;
         if (slots.length === 0) {
-            html += `<div style="color:var(--text-dim);font-size:.8rem;">${isPastDate ? 'Fecha pasada.' : 'Sin huecos libres.'}</div>`;
+            html += `<div style="color:var(--text-dim);font-size:.85rem;padding:.5rem;background:rgba(255,255,255,.03);border-radius:6px;text-align:center;">${isPastDate ? 'Fecha pasada.' : 'Sin huecos libres.'}</div>`;
         } else {
-            html += `<div style="display:flex;flex-wrap:wrap;gap:4px;">` +
-                slots.map(s => `<button type="button" class="slot-btn" data-slot-date="${dateStr}" data-slot-time="${s.time}" style="padding:4px 10px;background:${s.bgColor};border:1px solid ${s.borderColor};color:${s.textColor};border-radius:4px;font-size:.72rem;cursor:pointer;font-family:inherit;">${s.time}</button>`).join('') +
+            html += `<div class="slots-grid">` +
+                slots.map(s => `<button type="button" class="slot-btn" data-slot-date="${dateStr}" data-slot-time="${s.time}" style="background:${s.bgColor};border-color:${s.borderColor};color:${s.textColor};">${s.time}</button>`).join('') +
                 `</div>`;
         }
     }
@@ -1633,9 +1710,13 @@ function renderAgendaSidePanel(dateStr) {
             const id = btn.dataset.aptId;
             const apt = db.appointments.find(a => String(a.id) === String(id));
             if (!apt) return;
-            if (!confirm(`¿Eliminar la cita de ${apt.clientName || apt.client_name} el ${getAppointmentDate(apt)} a las ${getAppointmentTime(apt)}?`)) return;
+            const ok = await showCustomConfirm(
+                `¿Eliminar la cita de ${apt.clientName || apt.client_name} el ${getAppointmentDate(apt)} a las ${getAppointmentTime(apt)}?`,
+                { title: 'Eliminar cita', confirmText: 'Eliminar', danger: true }
+            );
+            if (!ok) return;
             const { error } = await deleteRowSafe('appointments', id);
-            if (error && !String(id).startsWith('apt_')) { console.error(error); showToast('Error eliminando cita: ' + error.message, 'error'); return; }
+            if (error) { console.error(error); showToast('Error eliminando cita: ' + error.message, 'error'); return; }
             db.appointments = db.appointments.filter(a => String(a.id) !== String(id));
             persistCollectionLocal('appointments', db.appointments);
             showToast('Cita eliminada');
@@ -1663,42 +1744,208 @@ function renderAgenda(dateStr) {
     const timeline = document.getElementById('agenda-timeline');
     timeline.innerHTML = '';
 
-    const normTime = (t) => (t || '').slice(0, 5);
     const dayApts = db.appointments
         .filter(a => getAppointmentDate(a) === dateStr)
         .sort((a,b) => getAppointmentTime(a).localeCompare(getAppointmentTime(b)));
 
+    // --- Solo tarjetas de citas en la columna izquierda ---
     if (dayApts.length === 0) {
         timeline.innerHTML = `<div class="empty-state"><i data-lucide="coffee"></i><p>Sin citas para este día.</p></div>`;
-        refreshIcons();
-        return;
+    } else {
+        dayApts.forEach(apt => {
+            const emp = db.employees.find(e => String(e.id) === String(getAppointmentEmployeeId(apt)));
+            const empColor = emp && emp.color ? emp.color : 'var(--accent)';
+            const service = db.services.find(s => s.name === apt.service);
+            const duration = service && service.duration ? service.duration : 60;
+
+            const eventEl = document.createElement('div');
+            eventEl.className = 'agenda-event';
+            eventEl.style.cssText = `background-color:${empColor};border-left:4px solid rgba(0,0,0,0.2);padding:10px 14px;border-radius:8px;margin-bottom:8px;cursor:pointer;transition:transform .15s,box-shadow .15s;`;
+            eventEl.innerHTML = `
+                <div class="event-time" style="font-weight:700;font-size:0.9rem;">${getAppointmentTime(apt) || '--:--'}</div>
+                <div class="event-title" style="font-size:0.85rem;margin-top:2px;">${apt.client_name || apt.clientName || 'Sin cliente'}</div>
+                <div class="event-desc" style="font-size:0.75rem;color:rgba(255,255,255,0.7);margin-top:2px;">${apt.service || 'Servicio'} ${emp ? '· ' + emp.name : ''} · ${duration}min</div>
+            `;
+            eventEl.onclick = () => openAppointmentDetail(apt);
+            eventEl.onmouseenter = () => { eventEl.style.transform = 'scale(1.02)'; eventEl.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)'; };
+            eventEl.onmouseleave = () => { eventEl.style.transform = ''; eventEl.style.boxShadow = ''; };
+            timeline.appendChild(eventEl);
+        });
+    }
+    refreshIcons();
+
+    // --- Panel lateral derecho (reutiliza renderAgendaSidePanel) ---
+    renderAgendaDaySidePanel(dateStr);
+}
+
+// Panel lateral de la vista Día — mismo contenido que renderAgendaSidePanel
+// pero apuntando al contenedor #agenda-day-side-content
+function renderAgendaDaySidePanel(dateStr) {
+    const panel = document.getElementById('agenda-day-side-content');
+    if (!panel) return;
+    const cfg = getBusinessConfig();
+    const _today = new Date();
+    const todayStr = `${_today.getFullYear()}-${String(_today.getMonth()+1).padStart(2,'0')}-${String(_today.getDate()).padStart(2,'0')}`;
+
+    const [y, m, d] = dateStr.split('-').map(n => parseInt(n));
+    const dateObj = new Date(y, m - 1, d);
+    const dow = dateObj.getDay();
+    const dayNames = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
+    const monthNames = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+
+    let html = `<div style="font-weight:700;font-size:1rem;margin-bottom:.8rem;">${dayNames[dow]} ${d} ${monthNames[m-1]}</div>`;
+
+    const dayHours = getBusinessHoursForDate(dateStr);
+    const isClosed = dayHours.closed;
+    if (isClosed) {
+        html += `<div class="badge badge-border" style="color:var(--danger);border-color:var(--danger);margin-bottom:.8rem;">Negocio cerrado este día</div>`;
     }
 
-    // Render as card-based timeline (no dependency on slot DOM elements)
-    dayApts.forEach(apt => {
-        const emp = db.employees.find(e => String(e.id) === String(getAppointmentEmployeeId(apt)));
-        const empColor = emp && emp.color ? emp.color : 'var(--accent)';
-        const duration = getAppointmentDuration(apt);
-        const serviceLabel = getAppointmentServices(apt).map(s => s.name).join(' + ') || apt.service || 'Servicio';
+    // Citas
+    const apts = db.appointments
+        .filter(a => getAppointmentDate(a) === dateStr)
+        .sort((a, b) => getAppointmentTime(a).localeCompare(getAppointmentTime(b)));
+    html += `<h5 style="font-size:.75rem;color:var(--text-dim);text-transform:uppercase;margin:.8rem 0 .4rem;">Citas (${apts.length})</h5>`;
+    if (apts.length === 0) {
+        html += `<div style="color:var(--text-dim);font-size:.8rem;">Sin citas programadas.</div>`;
+    } else {
+        html += apts.map(a => `<div class="apt-chip" data-apt-id="${a.id}" style="padding:6px 10px;background:rgba(91,58,138,0.15);border-left:3px solid var(--violet-400);border-radius:4px;margin-bottom:4px;font-size:.82rem;cursor:pointer;transition:background .15s;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <div>
+                    <strong>${getAppointmentTime(a) || '--:--'}</strong> · ${a.clientName || a.client_name || 'Sin cliente'}<br>
+                    <span style="color:var(--text-dim);font-size:.72rem;">${getAppointmentServices(a).map(s => s.name).join(' + ') || a.service || 'Servicio'}</span>
+                </div>
+                <div style="display:flex;gap:6px;">
+                    <button class="btn-icon apt-edit-btn" data-apt-id="${a.id}" title="Editar"><i data-lucide="pencil" style="width:14px;height:14px;color:var(--violet-300);"></i></button>
+                    <button class="btn-icon apt-del-btn" data-apt-id="${a.id}" title="Eliminar"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--danger);"></i></button>
+                </div>
+            </div>
+        </div>`).join('');
+    }
 
-        const eventEl = document.createElement('div');
-        eventEl.className = 'agenda-event';
-        eventEl.style.backgroundColor = empColor;
-        eventEl.style.borderLeft = `4px solid rgba(0,0,0,0.2)`;
-        eventEl.style.padding = '10px 14px';
-        eventEl.style.borderRadius = '8px';
-        eventEl.style.marginBottom = '8px';
-        eventEl.style.cursor = 'pointer';
-        eventEl.style.transition = 'transform 0.15s, box-shadow 0.15s';
-        eventEl.innerHTML = `
-            <div class="event-time" style="font-weight:700;font-size:0.9rem;">${getAppointmentTime(apt) || '--:--'}</div>
-            <div class="event-title" style="font-size:0.85rem;margin-top:2px;">${apt.client_name || apt.clientName || 'Sin cliente'}</div>
-            <div class="event-desc" style="font-size:0.75rem;color:rgba(255,255,255,0.7);margin-top:2px;">${apt.service || 'Servicio'} ${emp ? '· ' + emp.name : ''} · ${duration}min</div>
-        `;
-        eventEl.onclick = () => openAppointmentDetail(apt);
-        eventEl.onmouseenter = () => { eventEl.style.transform = 'scale(1.02)'; eventEl.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)'; };
-        eventEl.onmouseleave = () => { eventEl.style.transform = ''; eventEl.style.boxShadow = ''; };
-        timeline.appendChild(eventEl);
+    // Horarios disponibles
+    if (!isClosed && dayHours.openTime && dayHours.closeTime) {
+        const slots = [];
+        const toMin = t => { const [h, mn] = t.split(':').map(n => parseInt(n)); return h*60 + mn; };
+        const toStr = mm => `${String(Math.floor(mm/60)).padStart(2,'0')}:${String(mm%60).padStart(2,'0')}`;
+        const start = toMin(dayHours.openTime);
+        const end = toMin(dayHours.closeTime);
+        const blocks = (cfg.blockedSlots || []).filter(b => b.date === dateStr);
+        const tempRes = (window.tempSlotReservation && window.tempSlotReservation.date === dateStr) ? window.tempSlotReservation.time : null;
+        const isPastDate = dateStr < todayStr;
+        const activeEmps = db.employees || [];
+        const maxConcurrent = activeEmps.length > 0 ? activeEmps.length : 1;
+
+        for (let t = start; t < end; t += 30) {
+            const inBlock = blocks.some(b => t >= toMin(b.start) && t < toMin(b.end));
+            const ts = toStr(t);
+            const tempTaken = tempRes === ts;
+            let totalBusyCount = 0;
+            const busyEmpIds = [];
+            apts.forEach(a => {
+                if (!getAppointmentTime(a)) return;
+                const sTime = toMin(getAppointmentTime(a));
+                const srv = db.services.find(s => s.name === a.service);
+                const duration = srv && srv.duration ? parseInt(srv.duration) : 30;
+                const eTime = sTime + duration;
+                if (t >= sTime && t < eTime) {
+                    totalBusyCount++;
+                    const busyEmpId = getAppointmentEmployeeId(a);
+                    if (busyEmpId) busyEmpIds.push(busyEmpId);
+                }
+            });
+            if (!inBlock && !tempTaken && !isPastDate && totalBusyCount < maxConcurrent) {
+                let bgColor = 'rgba(52,211,153,0.12)', borderColor = 'rgba(52,211,153,0.3)', textColor = 'var(--success)';
+                if (totalBusyCount > 0 && activeEmps.length > 0) {
+                    const availableEmps = activeEmps.filter(e => !busyEmpIds.includes(e.id));
+                    if (availableEmps.length > 0 && availableEmps[0].color) {
+                        textColor = availableEmps[0].color;
+                        bgColor = availableEmps[0].color + '20';
+                        borderColor = availableEmps[0].color + '50';
+                    }
+                }
+                slots.push({ time: ts, bgColor, borderColor, textColor });
+            }
+        }
+        html += `<h5 style="font-size:.8rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;margin:1.2rem 0 .6rem;font-weight:700;">Horarios disponibles <span style="color:var(--success);font-weight:600;">(${slots.length})</span></h5>`;
+        if (slots.length === 0) {
+            html += `<div style="color:var(--text-dim);font-size:.85rem;padding:.5rem;background:rgba(255,255,255,.03);border-radius:6px;text-align:center;">${isPastDate ? 'Fecha pasada.' : 'Sin huecos libres.'}</div>`;
+        } else {
+            html += `<div class="slots-grid">${slots.map(s =>
+                `<button type="button" class="slot-btn" data-slot-date="${dateStr}" data-slot-time="${s.time}" style="background:${s.bgColor};border-color:${s.borderColor};color:${s.textColor};">${s.time}</button>`
+            ).join('')}</div>`;
+        }
+    }
+
+    // Cumpleaños
+    const bdays = db.clients.filter(c => {
+        if (!c.birthday) return false;
+        const [, bm, bd] = c.birthday.split('-').map(n => parseInt(n));
+        return bm === m && bd === d;
+    });
+    if (bdays.length > 0) {
+        html += `<h5 style="font-size:.75rem;color:var(--text-dim);text-transform:uppercase;margin:1rem 0 .4rem;">🎂 Cumpleaños</h5>`;
+        html += bdays.map(c => `<div style="font-size:.82rem;padding:4px 0;">${c.name}</div>`).join('');
+    }
+
+    // Deudas pendientes
+    const debtors = db.clients.filter(c => parseFloat(c.debt) > 0);
+    if (debtors.length > 0) {
+        html += `<h5 style="font-size:.75rem;color:var(--danger);text-transform:uppercase;margin:1rem 0 .4rem;">⚠ Deudas pendientes</h5>`;
+        html += debtors.slice(0, 5).map(c => {
+            const debtTx = db.transactions.filter(t => t.clientId == c.id && t.isIncome && /deuda/i.test(t.detail)).sort((a, b) => new Date(a.date) - new Date(b.date))[0];
+            const debtDate = debtTx ? new Date(debtTx.date).toLocaleDateString('es-UY', {day:'2-digit', month:'2-digit'}) : '';
+            return `<div style="display:flex;justify-content:space-between;align-items:center;font-size:.78rem;padding:5px 0;border-bottom:1px solid var(--border-subtle);">
+                <div>
+                    <span style="cursor:pointer;color:var(--text-primary);" onclick="openClientModal('${c.id}')">${c.name}</span>
+                    ${debtDate ? `<div style="font-size:.65rem;color:var(--text-dim);">desde ${debtDate}</div>` : ''}
+                </div>
+                <span style="color:var(--danger);font-weight:700;">$${c.debt}</span>
+            </div>`;
+        }).join('');
+        if (debtors.length > 5) html += `<div style="font-size:.7rem;color:var(--text-dim);margin-top:4px;">+${debtors.length - 5} más...</div>`;
+    }
+
+    panel.innerHTML = html;
+
+    // Listeners: editar/eliminar citas
+    panel.querySelectorAll('.apt-edit-btn, .apt-chip').forEach(el => {
+        el.addEventListener('click', (ev) => {
+            if (ev.target.closest('.apt-del-btn')) return;
+            ev.stopPropagation();
+            const id = el.dataset.aptId;
+            if (id) editAppointment(id);
+        });
+    });
+    panel.querySelectorAll('.apt-del-btn').forEach(btn => {
+        btn.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            const id = btn.dataset.aptId;
+            const apt = db.appointments.find(a => String(a.id) === String(id));
+            if (!apt) return;
+            const ok = await showCustomConfirm(
+                `¿Eliminar la cita de ${apt.clientName || apt.client_name} el ${getAppointmentDate(apt)} a las ${getAppointmentTime(apt)}?`,
+                { title: 'Eliminar cita', confirmText: 'Eliminar', danger: true }
+            );
+            if (!ok) return;
+            const { error } = await window.supabaseClient.from('appointments').delete().eq('id', id);
+            if (error) { console.error(error); showToast('Error eliminando cita: ' + error.message, 'error'); return; }
+            db.appointments = db.appointments.filter(a => String(a.id) !== String(id));
+            showToast('Cita eliminada');
+            renderAgenda(dateStr);
+        });
+    });
+
+    // Listeners: click en slot → abrir modal agendar
+    panel.querySelectorAll('.slot-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const d2 = btn.dataset.slotDate;
+            const t2 = btn.dataset.slotTime;
+            window.tempSlotReservation = { date: d2, time: t2 };
+            aptCurrentClient = null;
+            openAgendarModal(d2, t2);
+            renderAgenda(dateStr);
+        });
     });
     refreshIcons();
 }
@@ -2070,7 +2317,10 @@ function initQuickModals() {
         // Chequeo de duplicados
         const dup = findDuplicateClient(name, phone);
         if (dup) {
-            const use = confirm(`Ya existe una clienta similar: "${dup.name}"${dup.phone ? ' (' + dup.phone + ')' : ''}.\n\nAceptar = usar esa ficha existente.\nCancelar = crear una NUEVA de todos modos.`);
+            const use = await showCustomConfirm(
+                `Ya existe una clienta similar: "${dup.name}"${dup.phone ? ' (' + dup.phone + ')' : ''}.\n\n"Usar existente" = abrir esa ficha.\n"Crear nueva" = registrarla aunque sea similar.`,
+                { title: 'Clienta duplicada', confirmText: 'Usar existente', cancelText: 'Crear nueva' }
+            );
             if (use) {
                 showToast(`Usando ficha existente de ${dup.name}`, 'info');
                 closeQC();
@@ -2359,6 +2609,11 @@ async function saveTransaction() {
                 document.getElementById('btn-save-transaction').disabled = false;
                 return;
             }
+            if (debtAmount >= transactionSchema.amount) {
+                showToast('La deuda no puede ser mayor o igual al precio del servicio.', 'error');
+                document.getElementById('btn-save-transaction').disabled = false;
+                return;
+            }
             if (currentClient) {
                 currentClient.debt = (parseFloat(currentClient.debt) || 0) + debtAmount;
                 await window.supabaseClient.from('clients').update({debt: currentClient.debt}).eq('id', currentClient.id);
@@ -2366,6 +2621,8 @@ async function saveTransaction() {
                 const fmt2 = n => Number(n).toLocaleString('es-UY');
                 addClientLog(currentClient.id, `⚠ DEUDA GENERADA: $${fmt2(debtAmount)}`);
             }
+            // Restar la deuda del monto registrado en caja (la clienta solo pagó la diferencia)
+            transactionSchema.amount = transactionSchema.amount - debtAmount;
             transactionSchema.detail += ` (Generó Deuda: ${debtAmount})`;
         }
 
@@ -2631,7 +2888,9 @@ function renderTransactionsTable() {
                     </td>
                 </tr>`;
         } else {
-            const tMain = group[0];
+            // Prefer the non-tip transaction as the displayed "main" so the row
+            // shows the actual service name, not "Propina — ...".
+            const tMain = group.find(g => !txIsTip(g)) || group[0];
             const time = new Date(tMain.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
             let sumAmount = 0;
             let methodLabels = [];
@@ -2842,6 +3101,14 @@ function switchAnalyticsTab(tabId) {
     }
     const btn = document.querySelector(`.analytics-tabs .tab-btn[data-tab="${tabId}"]`);
     if (btn) btn.classList.add('active');
+
+    // Re-render the content of whichever tab the user just opened so charts
+    // and tables size correctly (Chart.js mis-sizes when canvas is hidden).
+    if (tabId === 'stats-closures' && typeof renderClosuresHistory === 'function') {
+        renderClosuresHistory();
+    } else if (tabId === 'stats-main' && typeof updateCharts === 'function') {
+        updateCharts();
+    }
 }
 
 function openCashClosureModal() {
@@ -2882,23 +3149,35 @@ function openCashClosureModal() {
     });
     empBreakdown += '</div>';
 
-    document.getElementById('closure-total-display').textContent = `$${fmt(cache.ef + cache.digital)}`;
-    document.getElementById('closure-cash-display').textContent = `$${fmt(cache.ef)}`;
-    document.getElementById('closure-digital-display').textContent = `$${fmt(cache.digital)}`;
-    document.getElementById('closure-date-display').textContent = today.toLocaleDateString('es-UY', { day:'numeric', month:'long', year:'numeric' });
-    document.getElementById('closure-note').value = '';
-    
-    // Inyectar desglose si hay
-    const container = document.getElementById('modal-closure').querySelector('.modal-body');
-    const existingBreakdown = container.querySelector('.closure-breakdown');
-    if (existingBreakdown) existingBreakdown.remove();
-    
-    const breakdownDiv = document.createElement('div');
-    breakdownDiv.className = 'closure-breakdown';
-    breakdownDiv.innerHTML = empBreakdown;
-    container.insertBefore(breakdownDiv, document.getElementById('closure-note').parentNode);
+    const modal = document.getElementById('modal-closure');
+    if (!modal) { showToast('No se encontró el modal de cierre.', 'error'); return; }
 
-    document.getElementById('modal-closure').classList.add('open');
+    const totalEl = document.getElementById('closure-total-display');
+    const cashEl = document.getElementById('closure-cash-display');
+    const digEl = document.getElementById('closure-digital-display');
+    const dateEl = document.getElementById('closure-date-display');
+    const noteEl = document.getElementById('closure-note');
+    if (totalEl) totalEl.textContent = `$${fmt(cache.ef + cache.digital)}`;
+    if (cashEl) cashEl.textContent = `$${fmt(cache.ef)}`;
+    if (digEl) digEl.textContent = `$${fmt(cache.digital)}`;
+    if (dateEl) dateEl.textContent = today.toLocaleDateString('es-UY', { day:'numeric', month:'long', year:'numeric' });
+    if (noteEl) noteEl.value = '';
+
+    // Inyectar desglose si hay
+    const container = modal.querySelector('.modal-body');
+    if (container) {
+        const existingBreakdown = container.querySelector('.closure-breakdown');
+        if (existingBreakdown) existingBreakdown.remove();
+
+        const breakdownDiv = document.createElement('div');
+        breakdownDiv.className = 'closure-breakdown';
+        breakdownDiv.innerHTML = empBreakdown;
+        const anchor = noteEl && noteEl.parentNode ? noteEl.parentNode : null;
+        if (anchor && anchor.parentNode === container) container.insertBefore(breakdownDiv, anchor);
+        else container.appendChild(breakdownDiv);
+    }
+
+    modal.classList.add('open');
 }
 
 async function saveCashClosure() {
@@ -3001,6 +3280,26 @@ function renderClosuresHistory() {
     refreshIcons();
 }
 
+function getClosureTransactions(closure) {
+    // Devuelve todas las transacciones que pertenecen a este cierre: las que
+    // ocurrieron el mismo día del cierre, ANTES de la hora del cierre, y DESPUÉS
+    // del cierre anterior del mismo día (si hay).
+    const closureDate = new Date(closure.closure_date);
+    // Cierre anterior del mismo día (si existe)
+    const sameDayPrior = db.closures
+        .filter(c => c.id != closure.id && isSameDay(c.closure_date, closure.closure_date)
+            && new Date(c.closure_date) < closureDate)
+        .sort((a, b) => new Date(b.closure_date) - new Date(a.closure_date))[0];
+    const lowerBound = sameDayPrior ? new Date(sameDayPrior.closure_date) : null;
+    return db.transactions.filter(t => {
+        if (!isSameDay(t.date, closure.closure_date)) return false;
+        const td = new Date(t.date);
+        if (td > closureDate) return false;
+        if (lowerBound && td <= lowerBound) return false;
+        return true;
+    }).sort((a, b) => new Date(b.date) - new Date(a.date));
+}
+
 function openClosureDetailModal(closureId) {
     const c = db.closures.find(x => x.id == closureId);
     if (!c) return;
@@ -3010,35 +3309,299 @@ function openClosureDetailModal(closureId) {
     const dateStr = date.toLocaleDateString('es-UY', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
     const timeStr = date.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
 
+    const txs = getClosureTransactions(c);
+
+    // Agrupar transacciones por fecha (para pagos mixtos)
+    const grouped = {};
+    txs.forEach(t => {
+        if (!grouped[t.date]) grouped[t.date] = [];
+        grouped[t.date].push(t);
+    });
+
+    let txRowsHTML = '';
+    if (txs.length === 0) {
+        txRowsHTML = `<div style="text-align:center; padding:1.5rem; color:var(--text-dim); font-size:.85rem;">Sin movimientos registrados para este cierre.</div>`;
+    } else {
+        Object.values(grouped).forEach(group => {
+            const main = group.find(g => !txIsTip(g)) || group[0];
+            const time = new Date(main.date).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+            let amountSum = 0, tipSum = 0;
+            const breakdownLines = [];
+            const txIds = group.map(g => g.id);
+            group.forEach(g => {
+                if (txIsTip(g)) tipSum += g.amount;
+                else if (g.isIncome) amountSum += g.amount;
+                else amountSum -= g.amount;
+                const methodLabel = g.method === 'tarjeta_debito' ? 'T.Débito'
+                    : g.method === 'tarjeta_credito' ? 'T.Crédito' : g.method;
+                breakdownLines.push(`<span style="color:var(--text-dim);">${methodLabel}: $${fmt(g.amount)}</span>`);
+            });
+            const cleanDetail = (main.detail || 'Servicio').split(' (')[0];
+            const sign = amountSum >= 0 ? '+' : '-';
+            const color = amountSum >= 0 ? 'var(--success)' : 'var(--danger)';
+            const isGroup = group.length > 1;
+            const idsAttr = txIds.join(',');
+
+            txRowsHTML += `
+                <div class="closure-tx-row" style="display:flex; align-items:center; gap:.6rem; padding:.55rem .65rem; background:rgba(255,255,255,.02); border:1px solid var(--border-subtle); border-radius:6px; margin-bottom:6px;">
+                    <div style="font-size:.72rem; color:var(--text-dim); min-width:42px;">${time}</div>
+                    <div style="flex:1; min-width:0;">
+                        <div style="font-size:.85rem; font-weight:600; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${main.clientName || (main.isIncome ? 'General' : 'Retiro')}</div>
+                        <div style="font-size:.72rem; color:var(--text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${cleanDetail} · ${breakdownLines.join(' · ')}${tipSum ? ` · <span style="color:var(--gold-400);">Propina $${fmt(tipSum)}</span>` : ''}</div>
+                    </div>
+                    <div style="font-weight:700; color:${color}; font-size:.9rem; white-space:nowrap;">${sign}$${fmt(Math.abs(amountSum))}</div>
+                    <button class="btn-icon btn-edit-closure-tx" data-tx-ids="${idsAttr}" title="Editar" style="padding:5px;"><i data-lucide="edit-2" style="width:14px;height:14px;color:var(--violet-300);"></i></button>
+                    <button class="btn-icon btn-del-closure-tx" data-tx-ids="${idsAttr}" title="Eliminar" style="padding:5px;"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--danger);"></i></button>
+                </div>`;
+        });
+    }
+
     document.getElementById('closure-detail-body').innerHTML = `
-        <div style="background: linear-gradient(135deg, rgba(91,58,138,0.2), rgba(201,168,76,0.1)); border-radius:16px; padding:24px; text-align:center; margin-bottom:20px; border: 1px solid rgba(155,114,212,0.25); box-shadow: 0 8px 32px rgba(0,0,0,0.2);">
-            <div style="font-size:0.75rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:1.5px; margin-bottom:8px; font-weight:600;">Balance del Día</div>
-            <div style="font-size:2.8rem; font-weight:900; color:var(--success); text-shadow: 0 0 20px rgba(74,222,128,0.3);">$${fmt(c.total_amount)}</div>
-            <div style="font-size:0.85rem; color:var(--text-dim); margin-top:6px; opacity:0.8;">${dateStr} · ${timeStr}</div>
+        <div style="background: linear-gradient(135deg, rgba(91,58,138,0.2), rgba(201,168,76,0.1)); border-radius:16px; padding:20px; text-align:center; margin-bottom:16px; border: 1px solid rgba(155,114,212,0.25);">
+            <div style="font-size:0.7rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:1.5px; margin-bottom:6px; font-weight:600;">Balance del Cierre</div>
+            <div style="font-size:2.4rem; font-weight:900; color:var(--success);">$${fmt(c.total_amount)}</div>
+            <div style="font-size:0.8rem; color:var(--text-dim); margin-top:4px;">${dateStr} · ${timeStr}</div>
         </div>
 
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:1.5rem;">
-            <div style="background:rgba(0,0,0,0.2); padding:12px; border-radius:8px;">
-                <div style="font-size:0.7rem; color:var(--text-dim); text-transform:uppercase;">Efectivo</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:1rem;">
+            <div style="background:rgba(0,0,0,0.2); padding:10px; border-radius:6px;">
+                <div style="font-size:0.68rem; color:var(--text-dim); text-transform:uppercase;">Efectivo</div>
                 <div style="font-size:1rem; font-weight:700; color:var(--text-primary);">$${fmt(c.cash_amount)}</div>
             </div>
-            <div style="background:rgba(0,0,0,0.2); padding:12px; border-radius:8px;">
-                <div style="font-size:0.7rem; color:var(--text-dim); text-transform:uppercase;">Digital</div>
+            <div style="background:rgba(0,0,0,0.2); padding:10px; border-radius:6px;">
+                <div style="font-size:0.68rem; color:var(--text-dim); text-transform:uppercase;">Digital</div>
                 <div style="font-size:1rem; font-weight:700; color:var(--text-primary);">$${fmt(c.digital_amount)}</div>
             </div>
         </div>
 
-        <div style="background:rgba(255,255,255,0.03); padding:12px; border-radius:8px; border: 1px solid var(--border);">
-            <div style="font-size:0.7rem; color:var(--text-dim); text-transform:uppercase; margin-bottom:5px;">Notas / Observaciones</div>
-            <div style="font-size:0.85rem; color:var(--text-primary); line-height:1.4;">${c.note || 'Sin observaciones.'}</div>
+        <div style="margin-bottom:1rem;">
+            <div style="font-size:.72rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:.5px; margin-bottom:.5rem; display:flex; justify-content:space-between; align-items:center;">
+                <span>Movimientos incluidos (${txs.length})</span>
+            </div>
+            <div style="max-height:280px; overflow-y:auto; padding-right:4px;">
+                ${txRowsHTML}
+            </div>
         </div>
-        
-        <div style="margin-top:1.5rem; text-align:center; font-size:0.75rem; color:var(--text-dim);">
+
+        <div style="background:rgba(255,255,255,0.03); padding:10px; border-radius:6px; border: 1px solid var(--border); margin-bottom:1rem;">
+            <div style="font-size:0.68rem; color:var(--text-dim); text-transform:uppercase; margin-bottom:4px;">Notas / Observaciones</div>
+            <div style="font-size:0.82rem; color:var(--text-primary); line-height:1.4;">${c.note || 'Sin observaciones.'}</div>
+        </div>
+
+        <div style="display:flex; gap:.5rem; margin-top:1rem;">
+            <button id="btn-delete-closure" class="btn btn-ghost btn-sm" style="flex:1; color:var(--danger); border-color:rgba(248,113,113,.3);" data-closure-id="${c.id}">
+                <i data-lucide="trash-2"></i> Eliminar cierre
+            </button>
+        </div>
+
+        <div style="margin-top:.8rem; text-align:center; font-size:0.7rem; color:var(--text-dim);">
             Realizado por ${c.created_by || 'Patricia'}
         </div>
     `;
-    
+
+    // Wire up edit/delete buttons
+    document.querySelectorAll('.btn-edit-closure-tx').forEach(btn => {
+        btn.onclick = () => {
+            const ids = btn.dataset.txIds.split(',');
+            editClosureTransaction(ids, c.id);
+        };
+    });
+    document.querySelectorAll('.btn-del-closure-tx').forEach(btn => {
+        btn.onclick = () => {
+            const ids = btn.dataset.txIds.split(',');
+            deleteClosureTransaction(ids, c.id);
+        };
+    });
+    const delClosureBtn = document.getElementById('btn-delete-closure');
+    if (delClosureBtn) delClosureBtn.onclick = () => deleteClosureFull(c.id);
+
+    refreshIcons();
     document.getElementById('modal-closure-detail').classList.add('open');
+}
+
+async function deleteClosureFull(closureId) {
+    const c = db.closures.find(x => x.id == closureId);
+    if (!c) return;
+    const ok = await showCustomConfirm(
+        `¿Eliminar el cierre del ${new Date(c.closure_date).toLocaleDateString('es-UY')} (${new Date(c.closure_date).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})})?\n\nLas transacciones NO se eliminan, solo el cierre.`,
+        { title: 'Eliminar cierre', confirmText: 'Eliminar', danger: true }
+    );
+    if (!ok) return;
+    try {
+        const isLocalId = String(c.id).startsWith('closure_');
+        if (!isLocalId && window.supabaseClient) {
+            const { error } = await window.supabaseClient.from('closures').delete().eq('id', c.id);
+            if (error) throw error;
+        }
+        db.closures = db.closures.filter(x => x.id != closureId);
+        persistCollectionLocal('closures', db.closures);
+        renderClosuresHistory();
+        const modal = document.getElementById('modal-closure-detail');
+        if (modal) modal.classList.remove('open');
+        showToast('Cierre eliminado.', 'success');
+    } catch (e) {
+        console.error('[Cierre] Error al eliminar:', e);
+        showToast('Error al eliminar el cierre: ' + (e.message || e), 'error');
+    }
+}
+
+async function deleteClosureTransaction(txIds, closureId) {
+    if (!txIds || txIds.length === 0) return;
+    const txs = db.transactions.filter(t => txIds.includes(String(t.id)));
+    if (txs.length === 0) return;
+    const main = txs.find(t => !txIsTip(t)) || txs[0];
+    const label = `${main.clientName || (main.isIncome ? 'General' : 'Retiro')} · ${(main.detail || '').split(' (')[0]}`;
+    const ok = await showCustomConfirm(
+        `¿Eliminar el movimiento "${label}"?\n\nEsto borrará ${txs.length} registro(s) y NO se puede deshacer.`,
+        { title: 'Eliminar movimiento', confirmText: 'Eliminar', danger: true }
+    );
+    if (!ok) return;
+    try {
+        for (const id of txIds) {
+            const tx = db.transactions.find(t => String(t.id) === String(id));
+            if (!tx) continue;
+            const isLocalId = String(id).startsWith('tx_');
+            if (!isLocalId && window.supabaseClient) {
+                const { error } = await window.supabaseClient.from('transactions').delete().eq('id', id);
+                if (error) throw error;
+            }
+        }
+        db.transactions = db.transactions.filter(t => !txIds.includes(String(t.id)));
+        persistCollectionLocal('transactions', db.transactions);
+        showToast('Movimiento eliminado.', 'success');
+        // Refresh closure detail and parent table
+        if (typeof renderTransactionsTable === 'function') renderTransactionsTable();
+        if (typeof updateStats === 'function') updateStats();
+        renderClosuresHistory();
+        openClosureDetailModal(closureId);
+    } catch (e) {
+        console.error('[Cierre] Error al eliminar transacción:', e);
+        showToast('Error al eliminar: ' + (e.message || e), 'error');
+    }
+}
+
+function editClosureTransaction(txIds, closureId) {
+    const txs = db.transactions.filter(t => txIds.includes(String(t.id)));
+    if (txs.length === 0) return;
+    openEditTransactionModal(txs, closureId);
+}
+
+function openEditTransactionModal(txs, returnToClosureId) {
+    const main = txs.find(t => !txIsTip(t)) || txs[0];
+    const tip = txs.find(t => txIsTip(t));
+
+    const fmt = n => Number(n).toLocaleString('es-UY');
+    const date = new Date(main.date);
+    const timeStr = date.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
+    const dateStr = date.toLocaleDateString('es-UY', { day:'2-digit', month:'2-digit', year:'numeric' });
+
+    // Construir filas editables para cada parte del pago
+    let partsHTML = '';
+    txs.forEach((t, idx) => {
+        if (txIsTip(t)) return;
+        partsHTML += `
+            <div style="display:grid; grid-template-columns:1.2fr 1fr; gap:.6rem; margin-bottom:.5rem;">
+                <div class="form-group" style="margin:0;">
+                    <label style="font-size:.7rem;">Monto ${idx === 0 ? 'principal' : `parte ${idx+1}`} ($)</label>
+                    <input type="number" class="edit-tx-amount" data-tx-id="${t.id}" value="${t.amount}" min="0" step="1" onwheel="this.blur()" style="width:100%; padding:.5rem; background:var(--bg-input); border:1px solid var(--border-subtle); border-radius:6px; color:var(--text-primary);">
+                </div>
+                <div class="form-group" style="margin:0;">
+                    <label style="font-size:.7rem;">Método</label>
+                    <select class="edit-tx-method" data-tx-id="${t.id}" style="width:100%; padding:.5rem; background:var(--bg-input); border:1px solid var(--border-subtle); border-radius:6px; color:var(--text-primary);">
+                        <option value="efectivo" ${t.method === 'efectivo' ? 'selected' : ''}>Efectivo</option>
+                        <option value="transferencia" ${t.method === 'transferencia' ? 'selected' : ''}>Transferencia</option>
+                        <option value="tarjeta_debito" ${t.method === 'tarjeta_debito' ? 'selected' : ''}>Tarjeta Débito</option>
+                        <option value="tarjeta_credito" ${t.method === 'tarjeta_credito' ? 'selected' : ''}>Tarjeta Crédito</option>
+                        <option value="seña" ${t.method === 'seña' ? 'selected' : ''}>Seña</option>
+                    </select>
+                </div>
+            </div>
+        `;
+    });
+    if (tip) {
+        partsHTML += `
+            <div style="display:grid; grid-template-columns:1.2fr 1fr; gap:.6rem; margin-bottom:.5rem;">
+                <div class="form-group" style="margin:0;">
+                    <label style="font-size:.7rem; color:var(--gold-400);">Propina ($)</label>
+                    <input type="number" class="edit-tx-amount" data-tx-id="${tip.id}" value="${tip.amount}" min="0" step="1" onwheel="this.blur()" style="width:100%; padding:.5rem; background:var(--bg-input); border:1px solid var(--border-subtle); border-radius:6px; color:var(--text-primary);">
+                </div>
+                <div class="form-group" style="margin:0;">
+                    <label style="font-size:.7rem;">Método propina</label>
+                    <select class="edit-tx-method" data-tx-id="${tip.id}" style="width:100%; padding:.5rem; background:var(--bg-input); border:1px solid var(--border-subtle); border-radius:6px; color:var(--text-primary);">
+                        <option value="efectivo" ${tip.method === 'efectivo' ? 'selected' : ''}>Efectivo</option>
+                        <option value="transferencia" ${tip.method === 'transferencia' ? 'selected' : ''}>Transferencia</option>
+                    </select>
+                </div>
+            </div>
+        `;
+    }
+
+    const bodyHTML = `
+        <div style="background:rgba(91,58,138,0.1); border-radius:8px; padding:.8rem; margin-bottom:1rem;">
+            <div style="font-size:.75rem; color:var(--text-dim);">Movimiento del ${dateStr} a las ${timeStr}</div>
+            <div style="font-size:.95rem; font-weight:700; color:var(--text-primary); margin-top:2px;">${main.clientName || (main.isIncome ? 'General' : 'Retiro')}</div>
+            <div style="font-size:.78rem; color:var(--text-dim); margin-top:2px;">${(main.detail || '').split(' (')[0]} · ${main.employee || ''}</div>
+        </div>
+        ${partsHTML}
+        <div style="display:flex; gap:.5rem; margin-top:1rem;">
+            <button id="btn-cancel-edit-tx" class="btn btn-ghost btn-sm" style="flex:1;">Cancelar</button>
+            <button id="btn-save-edit-tx" class="btn btn-primary btn-sm" style="flex:1;" data-tx-ids="${txs.map(t => t.id).join(',')}" data-closure-id="${returnToClosureId || ''}">
+                <i data-lucide="check"></i> Guardar cambios
+            </button>
+        </div>
+    `;
+
+    // Reutilizar el modal de detalle de cierre como contenedor temporal de edición
+    document.getElementById('closure-detail-body').innerHTML = bodyHTML;
+    document.getElementById('modal-closure-detail').classList.add('open');
+    refreshIcons();
+
+    document.getElementById('btn-cancel-edit-tx').onclick = () => {
+        if (returnToClosureId) openClosureDetailModal(returnToClosureId);
+        else document.getElementById('modal-closure-detail').classList.remove('open');
+    };
+    document.getElementById('btn-save-edit-tx').onclick = async () => {
+        await saveTransactionEdits(txs.map(t => t.id), returnToClosureId);
+    };
+}
+
+async function saveTransactionEdits(txIds, returnToClosureId) {
+    const updates = [];
+    document.querySelectorAll('.edit-tx-amount').forEach(input => {
+        const id = input.dataset.txId;
+        const amount = parseFloat(input.value);
+        const methodEl = document.querySelector(`.edit-tx-method[data-tx-id="${id}"]`);
+        const method = methodEl ? methodEl.value : null;
+        if (!isNaN(amount) && amount >= 0) {
+            updates.push({ id, amount, method });
+        }
+    });
+
+    try {
+        for (const u of updates) {
+            const tx = db.transactions.find(t => String(t.id) === String(u.id));
+            if (!tx) continue;
+            const isLocalId = String(u.id).startsWith('tx_');
+            tx.amount = u.amount;
+            if (u.method) tx.method = u.method;
+            if (!isLocalId && window.supabaseClient) {
+                const payload = { amount: u.amount };
+                if (u.method) payload.method = u.method;
+                const { error } = await window.supabaseClient.from('transactions').update(payload).eq('id', u.id);
+                if (error) throw error;
+            }
+        }
+        persistCollectionLocal('transactions', db.transactions);
+        showToast('Movimiento actualizado.', 'success');
+        if (typeof renderTransactionsTable === 'function') renderTransactionsTable();
+        if (typeof updateStats === 'function') updateStats();
+        renderClosuresHistory();
+        if (returnToClosureId) openClosureDetailModal(returnToClosureId);
+        else document.getElementById('modal-closure-detail').classList.remove('open');
+    } catch (e) {
+        console.error('[EditTx] Error:', e);
+        showToast('Error al guardar: ' + (e.message || e), 'error');
+    }
 }
 
 // ==========================================
@@ -3051,6 +3614,9 @@ function initCRM() {
     document.getElementById('btn-new-client').addEventListener('click', () => openClientModal());
     document.getElementById('btn-close-modal').addEventListener('click', closeClientModal);
     document.getElementById('btn-save-client').addEventListener('click', saveClient);
+    document.getElementById('btn-delete-client').addEventListener('click', () => {
+        if (activeModal) deleteClient(activeModal);
+    });
     document.getElementById('search-client-table').addEventListener('input', (e) => renderClientsTable(e.target.value));
     document.getElementById('btn-export-csv').addEventListener('click', exportClientesCSV);
     // Input file para subida de foto (usamos el del HTML si existe)
@@ -3195,7 +3761,8 @@ function renderClientFiles(clientId) {
 }
 
 async function deleteClientFile(fileId) {
-    if (!confirm('¿Eliminar este archivo permanentemente?')) return;
+    const ok = await showCustomConfirm('¿Eliminar este archivo permanentemente?', { title: 'Eliminar archivo', confirmText: 'Eliminar', danger: true });
+    if (!ok) return;
     
     try {
         const { error } = await window.supabaseClient.from('client_files').delete().eq('id', fileId);
@@ -3291,7 +3858,12 @@ function openClientModal(clientId = null) {
 
     const bBadge = document.getElementById('crm-badge-balance');
     bBadge.classList.add('hidden');
-    
+
+    const delBtn = document.getElementById('btn-delete-client');
+    if (delBtn) {
+        if (clientId) { delBtn.classList.remove('hidden'); } else { delBtn.classList.add('hidden'); }
+    }
+
     if (clientId) {
         const c = db.clients.find(x => x.id == clientId);
         if (c) {
@@ -3325,7 +3897,7 @@ function openClientModal(clientId = null) {
             if (balanceVal > 0 || debtVal > 0) {
                 bBadge.classList.remove('hidden');
                 if (balanceVal > 0) {
-                    bBadge.textContent = `Saldo a favor (Seña): $${fmt(balanceVal)}`;
+                    bBadge.innerHTML = `Saldo a favor (Seña): $${fmt(balanceVal)}`;
                     bBadge.style.color = 'var(--info)';
                     bBadge.style.borderColor = 'var(--info)';
                 } else {
@@ -3338,9 +3910,14 @@ function openClientModal(clientId = null) {
                         });
                         debtInfo += ` (Generada: ${[...new Set(debtDates)].join(', ')})`;
                     }
-                    bBadge.textContent = debtInfo;
+                    bBadge.innerHTML = `<span style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">${debtInfo} <button type="button" class="btn-cancel-debt" data-client-id="${c.id}" style="background:none;border:1px solid var(--success);color:var(--success);padding:2px 10px;border-radius:4px;font-size:.7rem;font-weight:700;cursor:pointer;transition:all .15s;">Cancelar deuda</button></span>`;
                     bBadge.style.color = 'var(--danger)';
                     bBadge.style.borderColor = 'var(--danger)';
+                    // Listener para cancelar deuda
+                    setTimeout(() => {
+                        const cancelBtn = bBadge.querySelector('.btn-cancel-debt');
+                        if (cancelBtn) cancelBtn.addEventListener('click', () => cancelClientDebt(c.id));
+                    }, 0);
                 }
                 bBadge.className = 'badge badge-border';
             }
@@ -3361,6 +3938,170 @@ function openClientModal(clientId = null) {
         document.getElementById('cm-files-section').classList.add('hidden');
     }
     refreshIcons();
+}
+
+// Eliminar clienta con opción de cascada (transacciones, citas, archivos)
+async function deleteClient(clientId) {
+    const client = db.clients.find(c => c.id == clientId);
+    if (!client) return;
+
+    // Contar registros asociados
+    const txCount = db.transactions.filter(t => String(t.clientId || t.client_id) === String(clientId)).length;
+    const aptCount = db.appointments.filter(a => String(a.clientId || a.client_id) === String(clientId)).length;
+    const fileCount = (db.clientFiles || []).filter(f => String(f.clientId || f.client_id) === String(clientId)).length;
+    const hasRecords = txCount + aptCount + fileCount > 0;
+
+    // Paso 1: confirmar eliminación
+    const ok = await showCustomConfirm(
+        `¿Eliminar a "${client.name}" del directorio?` +
+        (hasRecords ? `\n\nTiene ${txCount} transacciones, ${aptCount} citas y ${fileCount} archivos asociados.` : ''),
+        { title: 'Eliminar clienta', confirmText: 'Eliminar', danger: true }
+    );
+    if (!ok) return;
+
+    // Paso 2: si tiene registros, preguntar si borrarlos
+    let deleteRecords = false;
+    if (hasRecords) {
+        deleteRecords = await showCustomConfirm(
+            `¿Eliminar también todos los registros de "${client.name}" de la base de datos?\n\n• Sí → se borran transacciones, citas y archivos.\n• No → los registros quedan pero sin clienta asignada.`,
+            { title: 'Eliminar registros asociados', confirmText: 'Sí, eliminar todo', cancelText: 'No, conservar registros', danger: true }
+        );
+    }
+
+    try {
+        const isLocal = String(clientId).startsWith('client_');
+
+        if (deleteRecords) {
+            // Delete transactions
+            if (!isLocal && window.supabaseClient) {
+                const { error } = await window.supabaseClient.from('transactions').delete().eq('client_id', clientId);
+                if (error) console.error('[DeleteClient] tx error:', error);
+            }
+            db.transactions = db.transactions.filter(t => t.clientId != clientId && t.client_id != clientId);
+
+            // Delete appointments
+            if (!isLocal && window.supabaseClient) {
+                const { error } = await window.supabaseClient.from('appointments').delete().eq('client_id', clientId);
+                if (error) console.error('[DeleteClient] apt error:', error);
+            }
+            db.appointments = db.appointments.filter(a => (a.clientId || a.client_id) != clientId);
+
+            // Delete client files (storage + records)
+            const clientFiles = (db.clientFiles || []).filter(f => (f.clientId || f.client_id) == clientId);
+            for (const f of clientFiles) {
+                if (f.file_url && window.supabaseClient) {
+                    const path = f.file_url.split('/storage/v1/object/public/')[1];
+                    if (path) await window.supabaseClient.storage.from(path.split('/')[0]).remove([path.split('/').slice(1).join('/')]);
+                }
+                if (f.id && !String(f.id).startsWith('file_') && window.supabaseClient) {
+                    await window.supabaseClient.from('client_files').delete().eq('id', f.id);
+                }
+            }
+            db.clientFiles = (db.clientFiles || []).filter(f => (f.clientId || f.client_id) != clientId);
+            persistCollectionLocal('clientFiles', db.clientFiles);
+            persistCollectionLocal('transactions', db.transactions);
+            persistCollectionLocal('appointments', db.appointments);
+        }
+
+        // Delete the client
+        if (!isLocal && window.supabaseClient) {
+            // Delete profile photo from storage
+            if (client.photo_url) {
+                const path = client.photo_url.split('/storage/v1/object/public/')[1];
+                if (path) await window.supabaseClient.storage.from(path.split('/')[0]).remove([path.split('/').slice(1).join('/')]);
+            }
+            const { error } = await window.supabaseClient.from('clients').delete().eq('id', clientId);
+            if (error) { showToast('Error eliminando clienta: ' + error.message, 'error'); return; }
+        }
+        db.clients = db.clients.filter(c => c.id != clientId);
+        persistCollectionLocal('clients', db.clients);
+
+        // Limpiar localStorage asociado
+        localStorage.removeItem(`violet_log_${clientId}`);
+        localStorage.removeItem(`violet_photo_${clientId}`);
+
+        closeClientModal();
+        if (currentView === 'clients') renderClientsTable();
+        if (currentView === 'dashboard') initDashboard();
+        showToast(`"${client.name}" eliminada${deleteRecords ? ' con todos sus registros' : ''}`, 'success');
+    } catch (err) {
+        console.error('[DeleteClient]', err);
+        showToast('Error al eliminar: ' + (err.message || err), 'error');
+    }
+}
+
+// Cancelar deuda de una clienta — registra movimiento del día
+async function cancelClientDebt(clientId) {
+    const client = db.clients.find(c => c.id == clientId);
+    if (!client || !(parseFloat(client.debt) > 0)) return;
+
+    const debtAmount = parseFloat(client.debt);
+    const ok = await showCustomConfirm(
+        `¿Cancelar la deuda de $${fmt(debtAmount)} de "${client.name}"?\n\nSe registrará como movimiento del día de hoy.`,
+        { title: 'Cancelar deuda', confirmText: 'Cancelar deuda', danger: false }
+    );
+    if (!ok) return;
+
+    try {
+        // 1. Registrar transacción de cancelación de deuda
+        const now = new Date();
+        const txData = withCurrentUser({
+            transaction_date: now.toISOString(),
+            is_income: true,
+            amount: debtAmount,
+            client_name: client.name,
+            client_id: client.id,
+            detail: `Cancelación de deuda — ${client.name}`,
+            method: 'efectivo',
+            employee: '',
+            employee_id: null
+        });
+
+        const userId = getUserId();
+        if (userId) txData.user_id = userId;
+
+        if (window.supabaseClient) {
+            const { data, error } = await window.supabaseClient.from('transactions').insert([txData]).select();
+            if (error) {
+                // Retry sin columna inexistente
+                const m = error.message?.match(/Could not find the '(\w+)' column/i);
+                if (m && m[1]) {
+                    delete txData[m[1]];
+                    const retry = await window.supabaseClient.from('transactions').insert([txData]).select();
+                    if (retry.error) { showToast('Error: ' + retry.error.message, 'error'); return; }
+                    if (retry.data?.[0]) db.transactions.push({ ...retry.data[0], clientId: client.id, isIncome: true, date: retry.data[0].transaction_date });
+                } else {
+                    showToast('Error: ' + error.message, 'error');
+                    return;
+                }
+            } else if (data?.[0]) {
+                db.transactions.push({ ...data[0], clientId: client.id, isIncome: true, date: data[0].transaction_date });
+            }
+        } else {
+            const localTx = { ...txData, id: createLocalId('tx'), clientId: client.id, isIncome: true, date: txData.transaction_date };
+            db.transactions.push(localTx);
+        }
+        persistCollectionLocal('transactions', db.transactions);
+
+        // 2. Poner deuda en 0
+        client.debt = 0;
+        if (!String(client.id).startsWith('client_') && window.supabaseClient) {
+            await updateClientSafe(client.id, { debt: 0 });
+        }
+        persistCollectionLocal('clients', db.clients);
+
+        // 3. Log
+        addClientLog(clientId, `✅ Deuda cancelada: $${fmt(debtAmount)}`);
+
+        // 4. Refresh UI
+        showToast(`Deuda de $${fmt(debtAmount)} cancelada — registrada como movimiento de hoy`, 'success');
+        openClientModal(clientId); // refresca la ficha
+        if (currentView === 'caja') updateStats();
+        if (currentView === 'dashboard') initDashboard();
+    } catch (err) {
+        console.error('[CancelDebt]', err);
+        showToast('Error cancelando deuda: ' + (err.message || err), 'error');
+    }
 }
 
 // Devuelve mensajes del log de notas de citas de una clienta
@@ -3482,7 +4223,10 @@ async function saveClient() {
     if (!activeModal) {
         const dup = findDuplicateClient(clientData.name, clientData.phone);
         if (dup) {
-            const use = confirm(`Ya existe "${dup.name}"${dup.phone ? ' (' + dup.phone + ')' : ''}.\n\nAceptar = abrir esa ficha existente.\nCancelar = crear duplicada igualmente.`);
+            const use = await showCustomConfirm(
+                `Ya existe "${dup.name}"${dup.phone ? ' (' + dup.phone + ')' : ''}.\n\n"Abrir existente" = ir a la ficha actual.\n"Crear duplicada" = registrarla aunque sea similar.`,
+                { title: 'Clienta duplicada', confirmText: 'Abrir existente', cancelText: 'Crear duplicada' }
+            );
             if (use) {
                 btn.disabled = false;
                 closeClientModal();
@@ -3587,6 +4331,9 @@ async function saveClient() {
 // initAnalytics merged above
 
 function updateCharts() {
+    // 0. Tarjetas de resumen (mes corriente)
+    updateAnalyticsStatCards();
+
     // 1. Ingresos últimos 7 días (datos reales)
     const dayNames = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
     const last7Days = [];
@@ -3684,22 +4431,56 @@ function updateCharts() {
     });
 
     const dateInput = document.getElementById('employee-cash-date');
-    if (!dateInput.value) {
-        const todayLocal = new Date();
-        dateInput.value = `${todayLocal.getFullYear()}-${String(todayLocal.getMonth()+1).padStart(2,'0')}-${String(todayLocal.getDate()).padStart(2,'0')}`;
+    if (dateInput) {
+        if (!dateInput.value) {
+            const todayLocal = new Date();
+            dateInput.value = `${todayLocal.getFullYear()}-${String(todayLocal.getMonth()+1).padStart(2,'0')}-${String(todayLocal.getDate()).padStart(2,'0')}`;
+        }
+        dateInput.removeEventListener('change', renderEmployeeCashTable);
+        dateInput.addEventListener('change', renderEmployeeCashTable);
+        renderEmployeeCashTable();
     }
-    dateInput.removeEventListener('change', renderEmployeeCashTable);
-    dateInput.addEventListener('change', renderEmployeeCashTable);
-
-    renderEmployeeCashTable();
     renderServicesRanking();
+}
+
+function updateAnalyticsStatCards() {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const inCurrentMonth = (val) => {
+        if (!val) return false;
+        const d = new Date(val);
+        return !isNaN(d) && d.getFullYear() === year && d.getMonth() === month;
+    };
+
+    const monthlyIncomeTx = (db.transactions || []).filter(t =>
+        t.isIncome && !isTipTransaction(t) && t.method !== 'seña' && inCurrentMonth(t.date)
+    );
+    const monthlyIncome = monthlyIncomeTx.reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
+
+    const monthlyAppointments = (db.appointments || []).filter(a => inCurrentMonth(getAppointmentDate(a))).length;
+
+    const monthlyNewClients = (db.clients || []).filter(c => inCurrentMonth(c.created_at || c.createdAt)).length;
+
+    const avgTicket = monthlyIncomeTx.length ? monthlyIncome / monthlyIncomeTx.length : 0;
+
+    const fmtMoney = n => '$' + Number(n).toLocaleString('es-UY', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+    const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+
+    setText('stat-income-month', fmtMoney(monthlyIncome));
+    setText('stat-appointments-count', monthlyAppointments);
+    setText('stat-new-clients', monthlyNewClients);
+    setText('stat-avg-ticket', fmtMoney(avgTicket));
 }
 
 function renderEmployeeCashTable() {
     const tbody = document.getElementById('employee-cash-tbody');
+    if (!tbody) return;
     tbody.innerHTML = '';
-    
-    const selectedDateStr = document.getElementById('employee-cash-date').value;
+
+    const dateEl = document.getElementById('employee-cash-date');
+    if (!dateEl) return;
+    const selectedDateStr = dateEl.value;
     const todaysTrans = db.transactions.filter(t => isSameDay(t.date, selectedDateStr + 'T12:00:00') && t.isIncome);
 
     if (db.employees.length === 0) {
@@ -3941,8 +4722,12 @@ function initBusinessConfigUI() {
             showToast('Configuración guardada');
         });
 
-        document.getElementById('btn-reset-business-cfg').addEventListener('click', () => {
-            if (!confirm('¿Restaurar la configuración de agenda a los valores predeterminados?')) return;
+        document.getElementById('btn-reset-business-cfg').addEventListener('click', async () => {
+            const ok = await showCustomConfirm(
+                '¿Restaurar la configuración de agenda a los valores predeterminados?',
+                { title: 'Restaurar configuración', confirmText: 'Restaurar' }
+            );
+            if (!ok) return;
             localStorage.removeItem('violet_business_config');
             initBusinessConfigUI();
             showToast('Configuración restaurada a predeterminados', 'info');
@@ -4147,7 +4932,9 @@ function closeEmployeeModal() {
     editingEmployeeId = null;
 }
 
+let _savingEmployee = false;
 async function saveEmployee() {
+    if (_savingEmployee) return;
     const name = document.getElementById('emp-name').value.trim();
     if (!name) return;
 
@@ -4161,8 +4948,11 @@ async function saveEmployee() {
         color: empColor
     });
 
+    _savingEmployee = true;
     const submitBtn = document.querySelector('#fm-employee [type="submit"]');
-    submitBtn.disabled = true;
+    if (submitBtn) submitBtn.disabled = true;
+
+    try {
 
     if (editingEmployeeId) {
         // No enviar user_id en updates (es inmutable)
@@ -4265,12 +5055,18 @@ async function saveEmployee() {
         }
     }
 
-    submitBtn.disabled = false;
-    updateFormSelects();
-    renderEmployeesList();
-    if (typeof renderStaffPanel === 'function') renderStaffPanel();
-    if (currentView === 'analytics') updateCharts();
-    closeEmployeeModal();
+    } catch (err) {
+        console.error('[Employee] Excepción al guardar:', err);
+        showToast('Error inesperado al guardar', 'error');
+    } finally {
+        _savingEmployee = false;
+        if (submitBtn) submitBtn.disabled = false;
+        updateFormSelects();
+        renderEmployeesList();
+        if (typeof renderStaffPanel === 'function') renderStaffPanel();
+        if (currentView === 'analytics') updateCharts();
+        closeEmployeeModal();
+    }
 }
 
 function openProductModal(id = null) {
@@ -4497,80 +5293,276 @@ function renderEmployeesList() {
     });
 
     document.querySelectorAll('.btn-del-emp').forEach(btn => {
-        btn.onclick = async (e) => {
-            const id = e.currentTarget.getAttribute('data-id');
-            const { error } = await deleteRowSafe('employees', id);
-            if (error) console.warn('[Employee] Delete remote error:', error);
-            db.employees = db.employees.filter(x => x.id != id);
-            persistCollectionLocal('employees', db.employees);
-            updateFormSelects();
-            renderEmployeesList();
-            if (typeof renderStaffPanel === 'function') renderStaffPanel();
-            if (currentView === 'analytics') updateCharts();
-        };
+        btn.onclick = (e) => deleteEmployee(e.currentTarget.getAttribute('data-id'));
     });
     renderStaffPanelSummary();
     renderStaffBlockedList();
     refreshIcons();
 }
 
-function renderStaffPanel() {
+async function deleteEmployee(id) {
+    const emp = db.employees.find(x => String(x.id) === String(id));
+    if (!emp) return;
+    const ok = await showCustomConfirm(
+        `¿Eliminar a ${emp.name}? Esta acción no se puede deshacer.`,
+        { title: 'Eliminar funcionaria', confirmText: 'Eliminar', danger: true }
+    );
+    if (!ok) return;
+
+    const isLocalId = String(id).startsWith('emp_');
+    if (!isLocalId) {
+        try {
+            const { error } = await window.supabaseClient.from('employees').delete().eq('id', id);
+            if (error) console.warn('[Employee] Delete remote error:', error);
+        } catch (err) {
+            console.warn('[Employee] Delete remote exception:', err);
+        }
+    }
+    db.employees = db.employees.filter(x => String(x.id) !== String(id));
+    persistCollectionLocal('employees', db.employees);
+    try { localStorage.removeItem(`violet_emp_color_${id}`); } catch (_) {}
+    updateFormSelects();
+    renderEmployeesList();
+    if (typeof renderStaffPanel === 'function') renderStaffPanel();
+    if (currentView === 'analytics') updateCharts();
+    showToast(`${emp.name} eliminada`, 'success');
+}
+
+async function dedupeEmployees({ silent = true } = {}) {
+    if (!Array.isArray(db.employees) || db.employees.length < 2) return 0;
+    const groups = new Map();
+    db.employees.forEach(emp => {
+        if (!emp || !emp.name) return;
+        const key = String(emp.name).trim().toLowerCase();
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(emp);
+    });
+
+    let removed = 0;
+    const toRemoveRemote = [];
+    const keepers = [];
+
+    for (const [_, group] of groups) {
+        if (group.length === 1) { keepers.push(group[0]); continue; }
+        // Preferir IDs no-locales (vienen de Supabase: numéricos/uuid). Locales arrancan con "emp_".
+        group.sort((a, b) => {
+            const aLocal = String(a.id).startsWith('emp_') ? 1 : 0;
+            const bLocal = String(b.id).startsWith('emp_') ? 1 : 0;
+            return aLocal - bLocal;
+        });
+        const keeper = group[0];
+        const losers = group.slice(1);
+        losers.forEach(loser => {
+            keeper.tips = Math.max(parseFloat(keeper.tips) || 0, parseFloat(loser.tips) || 0);
+            keeper.advances = Math.max(parseFloat(keeper.advances) || 0, parseFloat(loser.advances) || 0);
+            keeper.payDay = keeper.payDay || keeper.pay_day || loser.payDay || loser.pay_day || null;
+            keeper.pay_day = keeper.pay_day || keeper.payDay || loser.pay_day || loser.payDay || null;
+            keeper.joinDate = keeper.joinDate || keeper.join_date || loser.joinDate || loser.join_date || null;
+            keeper.join_date = keeper.join_date || keeper.joinDate || loser.join_date || loser.joinDate || null;
+            keeper.color = keeper.color || loser.color || '#7b52b5';
+            if (!String(loser.id).startsWith('emp_')) toRemoveRemote.push(loser.id);
+            try { localStorage.removeItem(`violet_emp_color_${loser.id}`); } catch (_) {}
+            removed++;
+        });
+        keepers.push(keeper);
+    }
+
+    if (removed === 0) return 0;
+
+    for (const id of toRemoveRemote) {
+        try {
+            await window.supabaseClient.from('employees').delete().eq('id', id);
+        } catch (err) {
+            console.warn('[Dedupe] Error borrando duplicado remoto', id, err);
+        }
+    }
+    db.employees = keepers;
+    persistCollectionLocal('employees', db.employees);
+    if (!silent) showToast(`${removed} duplicado(s) de staff fusionados`, 'success');
+    console.log(`[Dedupe] ${removed} empleadas duplicadas fusionadas.`);
+    return removed;
+}
+
+async function renderStaffPanel() {
+    await dedupeEmployees({ silent: true });
     renderEmployeesList();
     renderStaffCards();
+    if (typeof updateFormSelects === 'function') updateFormSelects();
+}
+
+async function runStaffDedupe() {
+    const removed = await dedupeEmployees({ silent: false });
+    if (removed === 0) showToast('No se encontraron duplicados', 'info');
+    renderEmployeesList();
+    renderStaffCards();
+    updateFormSelects();
 }
 
 function renderStaffCards() {
     const list = document.getElementById('staff-employees-list');
     if (!list) return;
     if (db.employees.length === 0) {
-        list.innerHTML = '<span style="color:var(--text-dim);font-size:0.85rem">No hay funcionarias registradas.</span>';
+        list.innerHTML = '<li style="list-style:none;color:var(--text-dim);font-size:0.9rem;text-align:center;padding:2rem;">No hay funcionarias registradas. Hacé clic en "+ Nuevo Staff" para agregar la primera.</li>';
         return;
     }
     const cfg = typeof getBusinessConfig === 'function' ? getBusinessConfig() : {};
     const blockedSlots = Array.isArray(cfg.blockedSlots) ? cfg.blockedSlots : [];
+    const todayISO = new Date().toISOString().slice(0, 10);
+
     list.innerHTML = db.employees.map(emp => {
         const empBlocks = blockedSlots.filter(b => String(b.employeeId || b.employee_id || '') === String(emp.id));
+        const upcomingBlocks = empBlocks.filter(b => (b.date || b.blockDate || '') >= todayISO);
         const empColor = emp.color || localStorage.getItem(`violet_emp_color_${emp.id}`) || '#7b52b5';
         const tips = parseFloat(emp.tips) || 0;
         const advances = parseFloat(emp.advances) || 0;
+        const initial = (emp.name || '?').trim().charAt(0).toUpperCase();
+        const payDay = emp.payDay || emp.pay_day || '-';
+        const joinDate = emp.joinDate || emp.join_date || '-';
+
+        const blocksHTML = upcomingBlocks.length === 0
+            ? '<div style="font-size:0.78rem;color:var(--text-dim);padding:8px 0;">Sin bloqueos próximos.</div>'
+            : upcomingBlocks.slice(0, 4).map((b, idx) => {
+                const date = b.date || b.blockDate || '-';
+                const start = b.start || b.startTime || b.start_time || '';
+                const end = b.end || b.endTime || b.end_time || '';
+                const reason = b.reason ? ` · ${b.reason}` : '';
+                const blockKey = `${date}|${start}|${end}|${emp.id}`;
+                return `<div class="staff-block-row"><span><i data-lucide="calendar-x" style="width:12px;height:12px;vertical-align:-1px;color:var(--danger)"></i> <strong>${date}</strong> ${start}–${end}${reason}</span><button class="btn-icon btn-sm btn-unblock-slot" data-key="${blockKey}" title="Quitar bloqueo" style="color:var(--danger);padding:2px 6px;"><i data-lucide="x" style="width:12px;height:12px"></i></button></div>`;
+            }).join('') + (upcomingBlocks.length > 4 ? `<div style="font-size:0.72rem;color:var(--text-dim);margin-top:4px;">+${upcomingBlocks.length - 4} más</div>` : '');
+
         return `
-            <li class="staff-card" style="border-left:4px solid ${empColor};">
-                <div class="staff-card-main">
-                    <div>
-                        <div class="staff-name"><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${empColor};margin-right:8px;"></span>${emp.name}</div>
-                        <div class="staff-meta">Pago: ${emp.payDay || emp.pay_day || '-'} | Ingreso: ${emp.joinDate || emp.join_date || '-'}</div>
+            <li class="staff-card-v2" data-id="${emp.id}" style="border-left:4px solid ${empColor};">
+                <div class="staff-card-head">
+                    <div class="staff-avatar" style="background:${empColor};">${initial}</div>
+                    <div style="flex:1;min-width:0;">
+                        <div class="staff-name-v2">${emp.name}</div>
+                        <div class="staff-sub">Pago: día <strong>${payDay}</strong> · Ingreso: <strong>${joinDate}</strong></div>
                     </div>
-                    <div class="staff-metrics">
-                        <span>Propinas: <strong>$${fmt(tips)}</strong></span>
-                        <span>Adelantos: <strong>$${fmt(advances)}</strong></span>
-                        <span>Bloqueos: <strong>${empBlocks.length}</strong></span>
+                    <div class="staff-card-head-actions">
+                        <button class="btn-icon" onclick="openEmployeeModal('${emp.id}')" title="Editar"><i data-lucide="edit-2"></i></button>
+                        <button class="btn-icon btn-del-staff-card" data-id="${emp.id}" title="Eliminar" style="color:var(--danger);"><i data-lucide="trash-2"></i></button>
                     </div>
                 </div>
-                <div class="staff-actions">
-                    <button class="btn btn-ghost btn-sm" onclick="openEmployeeModal('${emp.id}')"><i data-lucide="edit-2"></i> Editar</button>
-                    <button class="btn btn-ghost btn-sm btn-staff-advance" data-id="${emp.id}"><i data-lucide="banknote"></i> Cargar adelanto</button>
-                    <button class="btn btn-ghost btn-sm btn-staff-block" data-id="${emp.id}"><i data-lucide="calendar-x"></i> Bloquear turno</button>
+
+                <div class="staff-metrics-grid">
+                    <div class="staff-metric staff-metric-tips">
+                        <div class="staff-metric-label"><i data-lucide="heart"></i> Propinas</div>
+                        <div class="staff-metric-value">$${fmt(tips)}</div>
+                    </div>
+                    <div class="staff-metric staff-metric-adv">
+                        <div class="staff-metric-label"><i data-lucide="trending-down"></i> Adelantos</div>
+                        <div class="staff-metric-value">$${fmt(advances)}</div>
+                    </div>
+                    <div class="staff-metric staff-metric-blocks">
+                        <div class="staff-metric-label"><i data-lucide="calendar-x"></i> Bloqueos</div>
+                        <div class="staff-metric-value">${upcomingBlocks.length}</div>
+                    </div>
+                </div>
+
+                <div class="staff-actions-v2">
+                    <button class="btn btn-ghost btn-sm btn-staff-tip" data-id="${emp.id}"><i data-lucide="heart"></i> Propina</button>
+                    <button class="btn btn-ghost btn-sm btn-staff-advance" data-id="${emp.id}"><i data-lucide="banknote"></i> Adelanto</button>
+                    <button class="btn btn-ghost btn-sm btn-staff-block" data-id="${emp.id}"><i data-lucide="calendar-x"></i> Bloquear</button>
+                </div>
+
+                <div class="staff-blocks-section">
+                    <div class="staff-blocks-title">Horarios bloqueados</div>
+                    ${blocksHTML}
                 </div>
             </li>
         `;
     }).join('');
 
+    list.querySelectorAll('.btn-staff-tip').forEach(btn => {
+        btn.onclick = () => openStaffTipModal(btn.dataset.id);
+    });
     list.querySelectorAll('.btn-staff-advance').forEach(btn => {
-        btn.onclick = () => addStaffAdvance(btn.dataset.id);
+        btn.onclick = () => openStaffAdvanceModal(btn.dataset.id);
     });
     list.querySelectorAll('.btn-staff-block').forEach(btn => {
-        btn.onclick = () => addStaffBlock(btn.dataset.id);
+        btn.onclick = () => openStaffBlockModal(btn.dataset.id);
+    });
+    list.querySelectorAll('.btn-del-staff-card').forEach(btn => {
+        btn.onclick = () => deleteEmployee(btn.dataset.id);
+    });
+    list.querySelectorAll('.btn-unblock-slot').forEach(btn => {
+        btn.onclick = () => removeStaffBlock(btn.dataset.key);
     });
     refreshIcons();
 }
 
-async function addStaffAdvance(employeeId) {
+function openStaffTipModal(employeeId) {
     const emp = db.employees.find(e => String(e.id) === String(employeeId));
     if (!emp) return;
-    const raw = prompt(`Monto del adelanto para ${emp.name}:`, '');
-    if (raw === null) return;
-    const amount = parseFloat(String(raw).replace(',', '.'));
-    if (isNaN(amount) || amount <= 0) return showToast('Monto inválido.', 'error');
+    document.getElementById('staff-tip-emp-id').value = emp.id;
+    document.getElementById('staff-tip-target').textContent = emp.name;
+    document.getElementById('staff-tip-amount').value = '';
+    document.getElementById('modal-staff-tip').classList.add('open');
+    setTimeout(() => document.getElementById('staff-tip-amount').focus(), 80);
+    refreshIcons();
+}
+
+async function submitStaffTip(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    const empId = document.getElementById('staff-tip-emp-id').value;
+    const amount = parseFloat(document.getElementById('staff-tip-amount').value);
+    const emp = db.employees.find(x => String(x.id) === String(empId));
+    if (!emp) return;
+    if (isNaN(amount) || amount <= 0) return showToast('Monto inválido', 'error');
+    emp.tips = (parseFloat(emp.tips) || 0) + amount;
+    persistCollectionLocal('employees', db.employees);
+    try {
+        const { error } = await window.supabaseClient.from('employees').update({ tips: emp.tips }).eq('id', emp.id);
+        if (error) throw error;
+        showToast(`Propina de $${fmt(amount)} registrada para ${emp.name}`, 'success');
+    } catch (err) {
+        emp.pendingSync = true;
+        persistCollectionLocal('employees', db.employees);
+        console.error('[Staff] Error guardando propina:', err);
+        showToast('Propina guardada localmente', 'warning');
+    }
+    document.getElementById('modal-staff-tip').classList.remove('open');
+    renderStaffPanel();
+}
+
+function removeStaffBlock(blockKey) {
+    if (!blockKey) return;
+    const [date, start, end, empId] = blockKey.split('|');
+    const cfg = getBusinessConfig();
+    cfg.blockedSlots = Array.isArray(cfg.blockedSlots) ? cfg.blockedSlots : [];
+    const before = cfg.blockedSlots.length;
+    cfg.blockedSlots = cfg.blockedSlots.filter(b => {
+        const bDate = b.date || b.blockDate || '';
+        const bStart = b.start || b.startTime || b.start_time || '';
+        const bEnd = b.end || b.endTime || b.end_time || '';
+        const bEmp = String(b.employeeId || b.employee_id || '');
+        return !(bDate === date && bStart === start && bEnd === end && bEmp === String(empId));
+    });
+    if (cfg.blockedSlots.length === before) return;
+    saveBusinessConfig(cfg);
+    renderStaffPanel();
+    if (typeof renderAgenda === 'function') renderAgenda(document.getElementById('agenda-date-picker')?.value || date);
+    showToast('Bloqueo eliminado', 'success');
+}
+
+function openStaffAdvanceModal(employeeId) {
+    const emp = db.employees.find(e => String(e.id) === String(employeeId));
+    if (!emp) return;
+    document.getElementById('staff-advance-emp-id').value = emp.id;
+    document.getElementById('staff-advance-target').textContent = emp.name;
+    document.getElementById('staff-advance-amount').value = '';
+    document.getElementById('modal-staff-advance').classList.add('open');
+    setTimeout(() => document.getElementById('staff-advance-amount').focus(), 80);
+    refreshIcons();
+}
+
+async function submitStaffAdvance(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    const empId = document.getElementById('staff-advance-emp-id').value;
+    const amount = parseFloat(document.getElementById('staff-advance-amount').value);
+    const emp = db.employees.find(x => String(x.id) === String(empId));
+    if (!emp) return;
+    if (isNaN(amount) || amount <= 0) return showToast('Monto inválido', 'error');
     emp.advances = (parseFloat(emp.advances) || 0) + amount;
     emp.payDay = emp.payDay || emp.pay_day || null;
     emp.joinDate = emp.joinDate || emp.join_date || null;
@@ -4578,34 +5570,120 @@ async function addStaffAdvance(employeeId) {
     try {
         const { error } = await window.supabaseClient.from('employees').update({ advances: emp.advances }).eq('id', emp.id);
         if (error) throw error;
-        showToast('Adelanto cargado', 'success');
+        showToast(`Adelanto de $${fmt(amount)} cargado para ${emp.name}`, 'success');
     } catch (err) {
         emp.pendingSync = true;
         persistCollectionLocal('employees', db.employees);
         console.error('[Staff] Error guardando adelanto:', err);
         showToast('Adelanto guardado localmente', 'warning');
     }
+    document.getElementById('modal-staff-advance').classList.remove('open');
     renderStaffPanel();
 }
 
-async function addStaffBlock(employeeId) {
+function openStaffBlockModal(employeeId) {
     const emp = db.employees.find(e => String(e.id) === String(employeeId));
     if (!emp) return;
     const today = new Date().toISOString().slice(0, 10);
-    const date = prompt(`Fecha a bloquear para ${emp.name} (AAAA-MM-DD):`, today);
-    if (!date) return;
-    const start = prompt('Hora inicio (HH:MM):', '09:00');
-    if (!start) return;
-    const end = prompt('Hora fin (HH:MM):', '10:00');
-    if (!end) return;
-    const reason = prompt('Motivo:', 'Bloqueo de horario') || '';
+    document.getElementById('staff-block-emp-id').value = emp.id;
+    document.getElementById('staff-block-target').textContent = emp.name;
+    // Default: día completo
+    const fullDayRadio = document.querySelector('input[name="staff-block-type"][value="full-day"]');
+    if (fullDayRadio) fullDayRadio.checked = true;
+    document.getElementById('staff-block-date').value = today;
+    document.getElementById('staff-block-start').value = '09:00';
+    document.getElementById('staff-block-end').value = '18:00';
+    document.getElementById('staff-block-date-from').value = today;
+    document.getElementById('staff-block-date-to').value = today;
+    document.getElementById('staff-block-reason').value = '';
+    updateStaffBlockSections();
+    document.getElementById('modal-staff-block').classList.add('open');
+    refreshIcons();
+}
+
+function updateStaffBlockSections() {
+    const type = document.querySelector('input[name="staff-block-type"]:checked')?.value || 'full-day';
+    const sDate = document.getElementById('staff-block-section-date');
+    const sTime = document.getElementById('staff-block-section-time');
+    const sRange = document.getElementById('staff-block-section-daterange');
+    if (sDate) sDate.style.display = (type === 'full-day' || type === 'time-range') ? 'block' : 'none';
+    if (sTime) sTime.style.display = (type === 'time-range') ? 'grid' : 'none';
+    if (sRange) sRange.style.display = (type === 'date-range') ? 'grid' : 'none';
+}
+
+function submitStaffBlock(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    const empId = document.getElementById('staff-block-emp-id').value;
+    const emp = db.employees.find(x => String(x.id) === String(empId));
+    if (!emp) return;
+    const type = document.querySelector('input[name="staff-block-type"]:checked')?.value || 'full-day';
+    const reason = document.getElementById('staff-block-reason').value.trim();
     const cfg = getBusinessConfig();
     cfg.blockedSlots = Array.isArray(cfg.blockedSlots) ? cfg.blockedSlots : [];
-    cfg.blockedSlots.push({ date, start, end, reason, employeeId: emp.id });
+
+    const added = [];
+    if (type === 'full-day') {
+        const date = document.getElementById('staff-block-date').value;
+        if (!date) return showToast('Fecha requerida', 'error');
+        added.push({ date, start: '00:00', end: '23:59', reason: reason || 'Día completo', employeeId: emp.id });
+    } else if (type === 'time-range') {
+        const date = document.getElementById('staff-block-date').value;
+        const start = document.getElementById('staff-block-start').value;
+        const end = document.getElementById('staff-block-end').value;
+        if (!date || !start || !end) return showToast('Faltan datos del horario', 'error');
+        if (start >= end) return showToast('Hora fin debe ser mayor que inicio', 'error');
+        added.push({ date, start, end, reason, employeeId: emp.id });
+    } else if (type === 'date-range') {
+        const from = document.getElementById('staff-block-date-from').value;
+        const to = document.getElementById('staff-block-date-to').value;
+        if (!from || !to) return showToast('Faltan fechas', 'error');
+        if (from > to) return showToast('Fecha "hasta" debe ser >= "desde"', 'error');
+        // Generar un bloqueo por cada día del rango (inclusive)
+        const [y1, m1, d1] = from.split('-').map(Number);
+        const [y2, m2, d2] = to.split('-').map(Number);
+        const start = new Date(y1, m1 - 1, d1);
+        const end = new Date(y2, m2 - 1, d2);
+        for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+            const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            added.push({ date: ds, start: '00:00', end: '23:59', reason: reason || 'Día completo', employeeId: emp.id });
+        }
+    }
+    cfg.blockedSlots.push(...added);
     saveBusinessConfig(cfg);
+    document.getElementById('modal-staff-block').classList.remove('open');
     renderStaffPanel();
-    if (typeof renderAgenda === 'function') renderAgenda(document.getElementById('agenda-date-picker')?.value || date);
-    showToast('Horario bloqueado', 'success');
+    if (typeof renderAgenda === 'function') renderAgenda(document.getElementById('agenda-date-picker')?.value);
+    showToast(`Bloqueo${added.length > 1 ? 's' : ''} guardado${added.length > 1 ? `s (${added.length} días)` : ''}`, 'success');
+}
+
+function initStaffModals() {
+    if (initStaffModals._done) return;
+    initStaffModals._done = true;
+
+    const wire = (modalId, formId, submitFn) => {
+        const overlay = document.getElementById(modalId);
+        if (!overlay) return;
+        // Close buttons
+        overlay.querySelectorAll('[data-close]').forEach(btn => {
+            btn.onclick = () => overlay.classList.remove('open');
+        });
+        // Click on overlay (no en el modal)
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) overlay.classList.remove('open');
+        });
+        // Form submit
+        const form = document.getElementById(formId);
+        if (form) form.addEventListener('submit', submitFn);
+    };
+
+    wire('modal-staff-tip', 'fm-staff-tip', submitStaffTip);
+    wire('modal-staff-advance', 'fm-staff-advance', submitStaffAdvance);
+    wire('modal-staff-block', 'fm-staff-block', submitStaffBlock);
+
+    // Cambio de tipo de bloqueo
+    document.querySelectorAll('input[name="staff-block-type"]').forEach(r => {
+        r.addEventListener('change', updateStaffBlockSections);
+    });
 }
 
 function renderStaffPanelSummary() {
@@ -4676,9 +5754,15 @@ function checkBirthdayAlert() {
 // ==========================================
 function isSameDay(d1, d2) {
     if (!d1 || !d2) return false;
-    const date1 = new Date(d1).toISOString().slice(0, 10);
-    const date2 = new Date(d2).toISOString().slice(0, 10);
-    return date1 === date2;
+    // Comparar usando fecha LOCAL (no UTC) para evitar desfasaje de zona horaria.
+    // Antes: toISOString().slice(0,10) usaba UTC y rompía la comparación cuando
+    // la hora local cruzaba medianoche en UTC (ej. 21:30 UY = 00:30 UTC siguiente día).
+    const date1 = new Date(d1);
+    const date2 = new Date(d2);
+    if (isNaN(date1.getTime()) || isNaN(date2.getTime())) return false;
+    return date1.getFullYear() === date2.getFullYear()
+        && date1.getMonth() === date2.getMonth()
+        && date1.getDate() === date2.getDate();
 }
 
 function openCierreCaja() {
@@ -4864,6 +5948,53 @@ function scrollAIChat() {
     const c = document.getElementById('ai-messages');
     c.scrollTop = c.scrollHeight;
 }
+
+// Modal de confirmación con estilo de la app (reemplaza al confirm() nativo)
+function showCustomConfirm(message, { title = 'Confirmar', confirmText = 'Aceptar', cancelText = 'Cancelar', danger = false } = {}) {
+    return new Promise((resolve) => {
+        // Limpiar instancia previa si existiera
+        const prev = document.getElementById('modal-custom-confirm');
+        if (prev) prev.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'modal-custom-confirm';
+        overlay.className = 'modal-overlay open';
+        overlay.style.zIndex = '900';
+        overlay.innerHTML = `
+            <div class="modal" style="max-width:440px;">
+                <div class="modal-header">
+                    <h3 style="margin:0;font-size:1.05rem;color:var(--text-primary);display:flex;align-items:center;gap:.5rem;">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="${danger ? 'var(--danger)' : 'var(--gold-400)'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                            <line x1="12" y1="9" x2="12" y2="13"/>
+                            <line x1="12" y1="17" x2="12.01" y2="17"/>
+                        </svg>
+                        ${title}
+                    </h3>
+                </div>
+                <div class="modal-body" style="padding:1.2rem 1.5rem;">
+                    <p style="margin:0;color:var(--text-secondary);font-size:.92rem;line-height:1.5;white-space:pre-wrap;">${message}</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" id="cc-cancel">${cancelText}</button>
+                    <button type="button" class="btn ${danger ? 'btn-danger' : 'btn-primary'}" id="cc-ok">${confirmText}</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        const close = (val) => { overlay.remove(); resolve(val); };
+        overlay.querySelector('#cc-ok').addEventListener('click', () => close(true));
+        overlay.querySelector('#cc-cancel').addEventListener('click', () => close(false));
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(false); });
+        const onKey = (e) => {
+            if (e.key === 'Escape') { document.removeEventListener('keydown', onKey); close(false); }
+            else if (e.key === 'Enter') { document.removeEventListener('keydown', onKey); close(true); }
+        };
+        document.addEventListener('keydown', onKey);
+        setTimeout(() => overlay.querySelector('#cc-ok')?.focus(), 50);
+    });
+}
+window.showCustomConfirm = showCustomConfirm;
 
 function showToast(message, type = 'success') {
     let container = document.getElementById('toast-container');

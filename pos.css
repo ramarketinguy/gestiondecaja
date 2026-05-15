@@ -113,6 +113,77 @@ body::before {
 .staff-metrics { display: flex; gap: .6rem; flex-wrap: wrap; justify-content: flex-end; color: var(--text-dim); font-size: .8rem; }
 .staff-metrics span { background: rgba(255,255,255,.04); border: 1px solid var(--border-subtle); border-radius: 999px; padding: .3rem .6rem; }
 .staff-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .9rem; }
+
+/* Staff cards v2 — diseño individual rico (versión amplia) */
+#staff-employees-list { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 1.25rem; }
+.staff-card-v2 { list-style: none; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 1.5rem 1.4rem 1.3rem; display: flex; flex-direction: column; gap: 1.1rem; transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease; }
+.staff-card-v2:hover { border-color: var(--violet-300); transform: translateY(-2px); box-shadow: 0 12px 32px rgba(0,0,0,.35); }
+.staff-card-head { display: flex; align-items: center; gap: 1rem; }
+.staff-avatar { width: 64px; height: 64px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1.7rem; color: #fff; flex-shrink: 0; box-shadow: 0 4px 12px rgba(0,0,0,.3); }
+.staff-name-v2 { font-weight: 800; color: var(--text-primary); font-size: 1.35rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.2; }
+.staff-sub { font-size: .85rem; color: var(--text-dim); margin-top: 4px; }
+.staff-card-head-actions { display: flex; gap: .35rem; flex-shrink: 0; }
+.staff-card-head-actions .btn-icon { padding: 8px; border-radius: 8px; background: transparent; border: 1px solid transparent; color: var(--text-dim); cursor: pointer; transition: background .15s, color .15s; }
+.staff-card-head-actions .btn-icon:hover { background: rgba(255,255,255,.06); color: var(--text-primary); }
+.staff-card-head-actions .btn-icon svg { width: 18px; height: 18px; }
+.staff-metrics-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .7rem; }
+.staff-metric { background: rgba(255,255,255,.03); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: .9rem .6rem; text-align: center; }
+.staff-metric-label { font-size: .72rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; display: flex; align-items: center; justify-content: center; gap: 5px; font-weight: 600; }
+.staff-metric-label svg { width: 13px; height: 13px; }
+.staff-metric-value { font-weight: 800; font-size: 1.4rem; color: var(--text-primary); margin-top: 6px; line-height: 1.1; }
+.staff-metric-tips .staff-metric-value { color: var(--gold-400); }
+.staff-metric-adv .staff-metric-value { color: var(--danger); }
+.staff-metric-blocks .staff-metric-value { color: var(--violet-200); }
+.staff-actions-v2 { display: grid; grid-template-columns: repeat(3, 1fr); gap: .55rem; }
+.staff-actions-v2 .btn { padding: 10px 10px; font-size: .85rem; font-weight: 600; }
+.staff-actions-v2 .btn svg { width: 16px; height: 16px; }
+.staff-blocks-section { border-top: 1px dashed var(--border-subtle); padding-top: .85rem; margin-top: .15rem; }
+.staff-blocks-title { font-size: .75rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; margin-bottom: .5rem; font-weight: 700; }
+.staff-block-row { display: flex; justify-content: space-between; align-items: center; gap: .55rem; padding: 6px 0; font-size: .85rem; color: var(--text-secondary); border-bottom: 1px solid rgba(255,255,255,.03); }
+.staff-block-row:last-child { border-bottom: none; }
+.staff-block-row .btn-icon { background: transparent; border: 1px solid transparent; cursor: pointer; padding: 4px 8px; }
+.staff-block-row .btn-icon:hover { background: rgba(255,77,77,.08); border-color: var(--danger); }
+
+/* En pantallas más chicas, una columna */
+@media (max-width: 720px) {
+    #staff-employees-list { grid-template-columns: 1fr; }
+}
+
+/* Horarios disponibles en la sidebar de Agenda — versión grande */
+.slots-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+    gap: 6px;
+    margin-top: 4px;
+}
+.slot-btn {
+    padding: 10px 8px;
+    border: 1px solid;
+    border-radius: 8px;
+    font-size: .92rem;
+    font-weight: 700;
+    cursor: pointer;
+    font-family: inherit;
+    transition: transform .12s ease, box-shadow .12s ease, filter .12s ease;
+    text-align: center;
+    letter-spacing: .02em;
+}
+.slot-btn:hover {
+    transform: translateY(-1px);
+    filter: brightness(1.15);
+    box-shadow: 0 4px 12px rgba(0,0,0,.25);
+}
+.slot-btn:active { transform: translateY(0); }
+
+/* Selector de tipo de bloqueo (radio buttons custom como cards) */
+.block-type-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem; margin-top: .4rem; }
+.block-type-option { position: relative; cursor: pointer; }
+.block-type-option input[type="radio"] { position: absolute; opacity: 0; pointer-events: none; }
+.block-type-option span { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .35rem; padding: .8rem .5rem; background: rgba(255,255,255,.03); border: 1.5px solid var(--border-subtle); border-radius: var(--radius-sm); font-size: .78rem; color: var(--text-dim); text-align: center; transition: all .15s ease; }
+.block-type-option span svg { width: 18px; height: 18px; }
+.block-type-option:hover span { border-color: var(--violet-300); color: var(--text-secondary); }
+.block-type-option input[type="radio"]:checked + span { border-color: var(--violet-400); background: rgba(155,114,212,.12); color: var(--violet-200); font-weight: 600; }
+.block-type-option input[type="radio"]:checked + span svg { color: var(--violet-200); }
 .weekly-hours-grid { display: grid; gap: .7rem; margin-top: .7rem; }
 .weekly-hours-row { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: .7rem; align-items: center; padding: .7rem; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: rgba(0,0,0,.14); }
 .weekly-day { display: flex; align-items: center; gap: .45rem; color: var(--text-secondary); font-size: .86rem; }
@@ -259,6 +330,8 @@ input:checked + .slider:before { transform: translateX(24px); background-color: 
 .btn-primary:hover { box-shadow: 0 4px 15px rgba(201,168,76,0.3); transform: translateY(-2px); }
 .btn-ghost { background: transparent; color: var(--text-secondary); border: 1px solid var(--border-subtle); }
 .btn-ghost:hover { color: var(--text-primary); background: var(--bg-hover); }
+.btn-danger { background: var(--danger); color: #fff; }
+.btn-danger:hover { box-shadow: 0 4px 15px rgba(239,68,68,0.35); transform: translateY(-2px); filter: brightness(1.1); }
 .btn-sm { padding: 0.5rem 1rem; font-size: 0.85rem; }
 
 /* ═══════════ AUTOCOMPLETE & ALERTS ═══════════ */
