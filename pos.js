@@ -2492,6 +2492,15 @@ function getPosProductTotal() {
 function syncSaleAmountFromFixedService() {
     const serviceId = document.getElementById('service')?.value;
     const amountInput = document.getElementById('amount');
+    
+    // Si venimos de chargeAppointment con multiples servicios, usamos su monto base total
+    if (window._chargeBaseAmount !== undefined && window._chargeBaseAmount !== null) {
+        if (amountInput) {
+            amountInput.value = window._chargeBaseAmount + getPosProductTotal();
+        }
+        return;
+    }
+
     const srv = db.services.find(s => String(s.id) === String(serviceId));
     if (amountInput && srv && srv.priceType === 'fijo') {
         amountInput.value = (parseFloat(srv.price) || 0) + getPosProductTotal();
@@ -2605,6 +2614,7 @@ async function saveTransaction() {
         if (window._chargeDetail) {
             transactionSchema.detail = window._chargeDetail;
             window._chargeDetail = null; // limpiar después de usar
+            window._chargeBaseAmount = null;
         } else {
             transactionSchema.detail = srv ? srv.name : 'Servicio';
         }
@@ -2820,6 +2830,7 @@ async function saveTransaction() {
            const bp = document.getElementById('pos-services-breakdown');
            if (bp) bp.classList.add('hidden');
            window._chargeDetail = null;
+           window._chargeBaseAmount = null;
            updateFormSelects();
         } else {
            document.getElementById('expense-amount').value = '';
@@ -6199,6 +6210,7 @@ function chargeAppointment(id) {
 
         // Guardar detalle completo para usar en saveTransaction
         window._chargeDetail = resolvedServices.map(s => s.name).join(' + ');
+        window._chargeBaseAmount = totalAmount;
         console.log('[COBRAR] Detalle guardado:', window._chargeDetail);
         
         // Monto
