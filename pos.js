@@ -1758,7 +1758,12 @@ function renderAgendaSidePanel(dateStr) {
 }
 
 function renderAgenda(dateStr) {
+    if (!dateStr) {
+        const _t = new Date();
+        dateStr = `${_t.getFullYear()}-${String(_t.getMonth()+1).padStart(2,'0')}-${String(_t.getDate()).padStart(2,'0')}`;
+    }
     const timeline = document.getElementById('agenda-timeline');
+    if (!timeline) return;
     timeline.innerHTML = '';
 
     const dayApts = db.appointments
@@ -2947,6 +2952,7 @@ function renderTransactionsTable() {
     const fmt = n => Number(n).toLocaleString('es-UY', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
     let totalIncome = 0, totalEgreso = 0;
 
+    let html = '';
     const grouped = {};
     todays.forEach(t => {
         const groupKey = t.date ? String(t.date) : 'no-date';
@@ -2975,11 +2981,11 @@ function renderTransactionsTable() {
                 if (t.isIncome && !txIsTip(t)) totalIncome += (t.amount || 0);
                 if (!t.isIncome) totalEgreso += (t.amount || 0);
 
-                tbody.innerHTML += `
+                html += `
                     <tr class="tx-row" data-tx-id="${t.id}" style="cursor:pointer;" title="Ver detalle">
                         <td style="color:var(--text-dim);white-space:nowrap;">${time}</td>
                         <td><strong>${t.isIncome ? (t.clientName || 'General') : 'Retiro'}</strong><br><small style="color:var(--text-dim)">${getTxEmployeeName(t)}</small></td>
-                        <td style="max-width:250px;white-space:normal;" title="${t.detail || ''}">${cleanDetail}</td>
+                        <td style="max-width:250px;white-space:normal;" title="${(t.detail || '').replace(/"/g, '&quot;')}">${cleanDetail}</td>
                         <td><span class="badge ${bCl}">${t.isIncome ? 'Ingreso' : 'Egreso'}</span></td>
                         <td style="color:${tipAmount ? 'var(--gold-400)' : 'var(--text-dim)'}; font-weight:700;" class="text-right">${tipAmount ? '$' + fmt(tipAmount) : '-'}</td>
                         <td style="color:${t.isIncome ? 'var(--success)' : 'var(--danger)'}; font-weight:700;" class="text-right">
@@ -3004,7 +3010,7 @@ function renderTransactionsTable() {
                 const txIds = group.map(g => g.id).join(',');
                 const mainDetail = String(tMain.detail || 'Servicio').split(' (')[0];
                 
-                tbody.innerHTML += `
+                html += `
                     <tr class="tx-row" data-tx-ids="${txIds}" style="cursor:pointer;" title="Movimiento Mixto">
                         <td style="color:var(--text-dim);white-space:nowrap;">${time}</td>
                         <td><strong>${tMain.isIncome ? (tMain.clientName || 'General') : 'Retiro'}</strong><br><small style="color:var(--text-dim)">${getTxEmployeeName(tMain)}</small></td>
@@ -3024,7 +3030,7 @@ function renderTransactionsTable() {
     });
 
     // Fila de totales al pie
-    tbody.innerHTML += `
+    html += `
         <tr style="border-top:2px solid var(--border-subtle); background:rgba(0,0,0,0.2);">
             <td colspan="4" style="font-weight:700; font-size:0.85rem; color:var(--text-secondary);">
                 ${Object.keys(grouped).length} movimiento${Object.keys(grouped).length === 1 ? '' : 's'}
@@ -3033,6 +3039,8 @@ function renderTransactionsTable() {
             <td style="font-weight:700; color:var(--text-secondary); text-align:right; font-size:0.8rem;">TOTAL</td>
             <td style="font-weight:800; color:var(--success); text-align:right; font-size:1.05rem;">$${fmt(totalIncome - totalEgreso)}</td>
         </tr>`;
+
+    tbody.innerHTML = html;
 
     // Click en fila → abrir detalle
     tbody.querySelectorAll('tr.tx-row').forEach(row => {
