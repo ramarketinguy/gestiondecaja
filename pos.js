@@ -6122,7 +6122,23 @@ function chargeAppointment(id) {
         let totalAmount = 0;
         let firstSrvId = null;
 
-        services.forEach((srvRef, idx) => {
+        // Expandir servicios compuestos: "Corte + Esmaltado + Depi" → 3 servicios individuales
+        const expandedServices = [];
+        services.forEach(srvRef => {
+            const rawName = String(srvRef.name || '').trim();
+            if (rawName.includes('+')) {
+                // Nombre compuesto: dividir por "+" y crear una entrada por cada sub-servicio
+                rawName.split(/\s*\+\s*/).filter(Boolean).forEach(subName => {
+                    expandedServices.push({ ...srvRef, name: subName.trim() });
+                });
+            } else {
+                expandedServices.push(srvRef);
+            }
+        });
+
+        console.log(`[COBRAR] Servicios expandidos (${expandedServices.length}):`, expandedServices.map(s => s.name));
+
+        expandedServices.forEach((srvRef, idx) => {
             const searchName = String(srvRef.name || '').trim().toLowerCase();
             const srv = db.services.find(s => 
                 String(s.id) === String(srvRef.id || srvRef.service_id) || 
