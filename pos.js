@@ -2601,7 +2601,13 @@ async function saveTransaction() {
         transactionSchema.client_id = currentClient ? currentClient.id : null;
         const srvId = document.getElementById('service').value;
         const srv = db.services.find(s => s.id == srvId); // == for types
-        transactionSchema.detail = srv ? srv.name : 'Servicio';
+        // Si viene de chargeAppointment con múltiples servicios, usar el detalle completo
+        if (window._chargeDetail) {
+            transactionSchema.detail = window._chargeDetail;
+            window._chargeDetail = null; // limpiar después de usar
+        } else {
+            transactionSchema.detail = srv ? srv.name : 'Servicio';
+        }
         transactionSchema.method = document.getElementById('payment-method').value;
         const soldProducts = posSelectedProducts.map(item => ({
             id: item.id,
@@ -2810,6 +2816,10 @@ async function saveTransaction() {
            document.getElementById('tip-amount').value = '';
            document.getElementById('tip-fields').classList.add('hidden');
            resetPosProducts();
+           // Limpiar panel de desglose de servicios si estaba visible
+           const bp = document.getElementById('pos-services-breakdown');
+           if (bp) bp.classList.add('hidden');
+           window._chargeDetail = null;
            updateFormSelects();
         } else {
            document.getElementById('expense-amount').value = '';
@@ -6127,7 +6137,6 @@ function chargeAppointment(id) {
         services.forEach(srvRef => {
             const rawName = String(srvRef.name || '').trim();
             if (rawName.includes('+')) {
-                // Nombre compuesto: dividir por "+" y crear una entrada por cada sub-servicio
                 rawName.split(/\s*\+\s*/).filter(Boolean).forEach(subName => {
                     expandedServices.push({ ...srvRef, name: subName.trim() });
                 });
@@ -6138,6 +6147,8 @@ function chargeAppointment(id) {
 
         console.log(`[COBRAR] Servicios expandidos (${expandedServices.length}):`, expandedServices.map(s => s.name));
 
+        // Buscar cada servicio en la DB y acumular resultados
+        const resolvedServices = [];
         expandedServices.forEach((srvRef, idx) => {
             const searchName = String(srvRef.name || '').trim().toLowerCase();
             const srv = db.services.find(s => 
@@ -6146,32 +6157,55 @@ function chargeAppointment(id) {
             );
             
             if (srv) {
-                console.log(`[COBRAR] Servicio ${idx + 1} encontrado: "${srv.name}" | Precio: ${srv.price}`);
-                totalAmount += parseFloat(srv.price) || 0;
+                const price = parseFloat(srv.price) || 0;
+                console.log(`[COBRAR] Servicio ${idx + 1} encontrado: "${srv.name}" | Precio: ${price}`);
+                totalAmount += price;
                 if (!firstSrvId) firstSrvId = srv.id;
+                resolvedServices.push({ name: srv.name, price, id: srv.id });
             } else {
-                // Fallback: si no existe en la DB, usamos el precio que viene en el objeto de la cita (si existe)
                 const fallbackPrice = parseFloat(srvRef.price) || 0;
                 console.warn(`[COBRAR] Servicio ${idx + 1} NO encontrado en base de datos: "${srvRef.name}". Usando precio de cita: ${fallbackPrice}`);
                 totalAmount += fallbackPrice;
+                resolvedServices.push({ name: srvRef.name, price: fallbackPrice, id: null });
             }
         });
 
-        // Intentamos seleccionar el primer servicio si existe
+        // Seleccionar primer servicio en dropdown
         if (firstSrvId) {
             serviceSelect.value = firstSrvId;
-            console.log('[COBRAR] Seleccionando servicio principal ID:', firstSrvId);
             if (typeof syncCustomSelect === 'function') syncCustomSelect('service');
-        } else if (services.length > 0) {
-            console.warn('[COBRAR] No se pudo determinar el ID del primer servicio para el dropdown. Dejando selección actual.');
         }
+
+        // Mostrar panel de desglose si hay más de 1 servicio
+        const breakdownPanel = document.getElementById('pos-services-breakdown');
+        const breakdownList = document.getElementById('pos-services-breakdown-list');
+        const breakdownTotal = document.getElementById('pos-services-breakdown-total');
+        
+        if (breakdownPanel && breakdownList) {
+            if (resolvedServices.length > 1) {
+                const fmt = n => n.toLocaleString('es-UY');
+                breakdownList.innerHTML = resolvedServices.map(s => `
+                    <div style="display:flex; justify-content:space-between; padding:3px 0; color:var(--text-primary);">
+                        <span style="font-weight:500;">✦ ${s.name}</span>
+                        <span style="font-weight:700; color:var(--success);">$${fmt(s.price)}</span>
+                    </div>
+                `).join('');
+                if (breakdownTotal) breakdownTotal.textContent = `$${fmt(totalAmount)}`;
+                breakdownPanel.classList.remove('hidden');
+            } else {
+                breakdownPanel.classList.add('hidden');
+            }
+        }
+
+        // Guardar detalle completo para usar en saveTransaction
+        window._chargeDetail = resolvedServices.map(s => s.name).join(' + ');
+        console.log('[COBRAR] Detalle guardado:', window._chargeDetail);
         
         // Monto
         const amountInput = document.getElementById('amount');
         if (amountInput) {
             amountInput.value = totalAmount;
             console.log('[COBRAR] Monto total cargado:', totalAmount);
-            // Disparar evento input para que otros cálculos (ej. vuelto) se actualicen si existen
             amountInput.dispatchEvent(new Event('input'));
         }
     }
