@@ -2483,6 +2483,7 @@ function clearClientSelection() {
     document.getElementById('client-name').value = '';
     document.getElementById('discount-alert').classList.add('hidden');
     document.getElementById('apply-discount').checked = false;
+    window._chargeAppointmentId = null;
 }
 
 function getPosProductTotal() {
@@ -2804,6 +2805,8 @@ async function saveTransaction() {
             }
         }
 
+        const savedAppointmentId = window._chargeAppointmentId;
+
         if (isIncome) {
            const savedClientId = transactionSchema.client_id;
            clearClientSelection();
@@ -2830,6 +2833,7 @@ async function saveTransaction() {
            if (bp) bp.classList.add('hidden');
            window._chargeDetail = null;
            window._chargeBaseAmount = null;
+           window._chargeAppointmentId = null;
            updateFormSelects();
         } else {
            document.getElementById('expense-amount').value = '';
@@ -2847,6 +2851,27 @@ async function saveTransaction() {
         updateStats();
         renderTransactionsTable();
         showToast('Movimiento registrado en caja.');
+        
+        // Si el cobro proviene de una cita, eliminarla de la agenda
+        if (savedAppointmentId) {
+            try {
+                // Intentar borrar remotamente, sin bloquear la UI
+                if (typeof deleteRowSafe === 'function') {
+                    deleteRowSafe('appointments', savedAppointmentId).catch(err => console.error('[Caja] Error al borrar cita cobrada remotamente:', err));
+                }
+                
+                // Borrar localmente
+                db.appointments = db.appointments.filter(a => String(a.id) !== String(savedAppointmentId));
+                if (typeof persistCollectionLocal === 'function') persistCollectionLocal('appointments', db.appointments);
+                
+                // Refrescar interfaces
+                if (typeof renderDashboardAgendaResumen === 'function') renderDashboardAgendaResumen();
+                if (typeof renderAgenda === 'function') renderAgenda();
+            } catch (err) {
+                console.error('[Caja] Error al procesar cita cobrada:', err);
+            }
+        }
+
     } else {
         console.error(error);
         const localRows = inserts.map(tx => ({
@@ -6124,6 +6149,7 @@ function chargeAppointment(id) {
     }
 
     console.log('[COBRAR] Iniciando cobro de cita:', apt);
+    window._chargeAppointmentId = id;
 
     // 1. Navegar a POS (Caja)
     if (typeof window.navigateTo === 'function') window.navigateTo('caja');
