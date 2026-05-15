@@ -3851,6 +3851,22 @@ async function deleteClientFile(fileId) {
     }
 }
 
+function findDuplicateClient(name, phone) {
+    if (!name) return null;
+    const cleanName = String(name).trim().toLowerCase();
+    const cleanPhone = String(phone || '').trim();
+    
+    return db.clients.find(c => {
+        const cName = String(c.name || '').trim().toLowerCase();
+        const cPhone = String(c.phone || '').trim();
+        
+        if (cleanPhone && cPhone) {
+            return cName === cleanName && cPhone === cleanPhone;
+        }
+        return cName === cleanName;
+    });
+}
+
 async function createClient(name, phone = '') {
     // Evitar duplicados automáticamente: si ya existe, devolver la ficha existente
     const existing = findDuplicateClient(name, phone);
