@@ -1314,14 +1314,18 @@ async function saveAppointment() {
         return (start < aEnd && end > aStart);
     });
 
-    // Se elimina el bloqueo por colisión para permitir agendar a varias clientas con la misma funcionaria.
-
     // Crear clienta si no existe
     if (!aptCurrentClient) {
         showToast('Creando clienta...', 'info');
         aptCurrentClient = await createClient(nameInput);
         if (!aptCurrentClient) return;
     }
+
+    // 3. Validaciones de día cerrado y colisión
+    const dayHours = getBusinessHoursForDate(dateInput);
+    const isClosed = dayHours.closed;
+    const collisionMsg = hasCollision ? "Ya hay un turno agendado en ese horario con la misma funcionaria." : "";
+    const closedMsg = isClosed ? "El salón está configurado como CERRADO para este día." : "";
 
     const aptData = withCurrentUser({
         client_id: aptCurrentClient.id,
@@ -1337,6 +1341,25 @@ async function saveAppointment() {
     });
     const repeatDates = getAppointmentRepeatDates(dateInput);
 
+    if (hasCollision || isClosed) {
+        const warningModal = document.getElementById('modal-appointment-warning');
+        const warningText = document.getElementById('apt-warning-msg');
+        const confirmBtn = document.getElementById('btn-confirm-apt-force');
+        if (warningModal && warningText && confirmBtn) {
+            warningText.innerHTML = `<strong>Atención:</strong><br>${closedMsg}${closedMsg && collisionMsg ? '<br>' : ''}${collisionMsg}<br><br>¿Deseas agendar de todas formas?`;
+            warningModal.classList.add('open');
+            confirmBtn.onclick = async () => {
+                warningModal.classList.remove('open');
+                await executeSaveAppointment(aptData, repeatDates, dateInput, duration, endTime);
+            };
+            return;
+        }
+    }
+
+    await executeSaveAppointment(aptData, repeatDates, dateInput, duration, endTime);
+}
+
+async function executeSaveAppointment(aptData, repeatDates, dateInput, duration, endTime) {
     showToast('Guardando cita...', 'info');
     let res;
     try {
@@ -1346,6 +1369,7 @@ async function saveAppointment() {
             delete updateData.user_id;
             res = await updateRowSafe('appointments', editingAppointmentId, updateData);
             if (res.error || !res.data?.[0]) {
+                // Fallback local si falla Supabase o no hay cliente
                 res = {
                     data: [{
                         ...updateData,
@@ -1355,20 +1379,13 @@ async function saveAppointment() {
                         clientId: updateData.client_id,
                         clientName: updateData.client_name,
                         employeeId: updateData.employee_id,
+                        services: updateData.services,
+                        duration: updateData.duration,
                         endTime: updateData.end_time,
-                        pendingSync: true
+                        pendingSync: !window.supabaseClient
                     }],
-                    error: null
+                    error: res.error || null
                 };
-            }
-            if (res.error) {
-                // Retry sin campos problemáticos
-                const m = res.error.message?.match(/Could not find the '(\w+)' column/i);
-                if (m && m[1] && m[1] in updateData) {
-                    delete updateData[m[1]];
-                    console.warn(`[Cita] Columna '${m[1]}' no existe, reintentando sin ella.`);
-                    res = await window.supabaseClient.from('appointments').update(updateData).eq('id', editingAppointmentId).select();
-                }
             }
         } else {
             const savedRows = [];
@@ -1392,18 +1409,7 @@ async function saveAppointment() {
                         pendingSync: true
                     });
                 } else {
-                    savedRows.push(insertRes.data?.[0] || {
-                        ...row,
-                        id: createLocalId('apt'),
-                        date: row.apt_date,
-                        time: row.apt_time,
-                        clientId: row.client_id,
-                        clientName: row.client_name,
-                        employeeId: row.employee_id,
-                        services: row.services,
-                        duration: row.duration,
-                        endTime: row.end_time
-                    });
+                    savedRows.push(insertRes.data?.[0]);
                 }
             }
             res = { data: savedRows, error: firstError && savedRows.length === 0 ? firstError : null };
@@ -1414,36 +1420,29 @@ async function saveAppointment() {
         return;
     }
 
-    if (!res.error && res.data) {
-        const savedAppointments = res.data.map(raw => ({
-            ...raw,
-            date: raw.apt_date || raw.date,
-            time: raw.apt_time || raw.time,
-            clientId: raw.client_id || raw.clientId,
-            clientName: raw.client_name || raw.clientName,
-            serviceId: raw.service_id || raw.serviceId,
-            employeeId: raw.employee_id || raw.employeeId,
-            services: normalizeAppointmentServices(raw.services),
-            duration: raw.duration ? parseInt(raw.duration, 10) : duration,
-            endTime: normalizeTimeValue(raw.end_time || raw.endTime || endTime)
-        }));
-        const raw = savedAppointments[0];
-        // Apply same transform as loadDataFromSupabase so mapped fields (date, time, clientId, etc.) exist
-        const apt = {
-            ...raw,
-            date: raw.date,
-            time: raw.time,
-            clientId: raw.clientId,
-            clientName: raw.clientName,
-            serviceId: raw.serviceId,
-            employeeId: raw.employeeId
-        };
-        if (editingAppointmentId) {
-            const idx = db.appointments.findIndex(a => a.id == editingAppointmentId);
-            if (idx >= 0) db.appointments[idx] = apt;
-        } else {
-            savedAppointments.forEach(item => db.appointments.push(item));
-        }
+    if (res.data && res.data.length > 0) {
+        res.data.forEach(raw => {
+            if (!raw) return;
+            const apt = {
+                ...raw,
+                date: raw.apt_date || raw.date,
+                time: raw.apt_time || raw.time,
+                clientId: raw.client_id || raw.clientId,
+                clientName: raw.client_name || raw.clientName,
+                serviceId: raw.service_id || raw.serviceId,
+                employeeId: raw.employee_id || raw.employeeId,
+                services: normalizeAppointmentServices(raw.services),
+                duration: raw.duration ? parseInt(raw.duration, 10) : duration,
+                endTime: normalizeTimeValue(raw.end_time || raw.endTime || endTime)
+            };
+            if (editingAppointmentId && String(apt.id) === String(editingAppointmentId)) {
+                const idx = db.appointments.findIndex(a => String(a.id) === String(editingAppointmentId));
+                if (idx >= 0) db.appointments[idx] = apt;
+            } else {
+                db.appointments.push(apt);
+            }
+        });
+        
         showToast('Cita guardada con éxito');
         persistCollectionLocal('appointments', db.appointments);
         closeAgendarModal();
@@ -1577,18 +1576,22 @@ function renderAgendaSidePanel(dateStr) {
     if (apts.length === 0) {
         html += `<div style="color:var(--text-dim);font-size:.8rem;">Sin citas programadas.</div>`;
     } else {
-        html += apts.map(a => `<div class="apt-chip" data-apt-id="${a.id}" style="padding:6px 10px;background:rgba(91,58,138,0.15);border-left:3px solid var(--violet-400);border-radius:4px;margin-bottom:4px;font-size:.82rem;cursor:pointer;transition:background .15s;">
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-                <div>
-                    <strong>${getAppointmentTime(a) || '--:--'}</strong> · ${a.clientName || a.client_name || 'Sin cliente'}<br>
-                    <span style="color:var(--text-dim);font-size:.72rem;">${a.service || 'Servicio s/e'}</span>
+        html += apts.map(a => {
+            const emp = db.employees.find(e => String(e.id) === String(getAppointmentEmployeeId(a)));
+            const empColor = emp && emp.color ? emp.color : 'var(--violet-400)';
+            return `<div class="apt-chip" data-apt-id="${a.id}" style="padding:6px 10px;background:rgba(91,58,138,0.15);border-left:3px solid ${empColor};border-radius:4px;margin-bottom:4px;font-size:.82rem;cursor:pointer;transition:background .15s;">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <div>
+                        <strong>${getAppointmentTime(a) || '--:--'}</strong> · ${a.clientName || a.client_name || 'Sin cliente'}<br>
+                        <span style="color:var(--text-dim);font-size:.72rem;">${a.service || 'Servicio s/e'}</span>
+                    </div>
+                    <div style="display:flex;gap:6px;">
+                        <button class="btn-icon apt-edit-btn" data-apt-id="${a.id}" title="Editar"><i data-lucide="pencil" style="width:14px;height:14px;color:var(--violet-300);"></i></button>
+                        <button class="btn-icon apt-del-btn" data-apt-id="${a.id}" title="Eliminar"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--danger);"></i></button>
+                    </div>
                 </div>
-                <div style="display:flex;gap:6px;">
-                    <button class="btn-icon apt-edit-btn" data-apt-id="${a.id}" title="Editar"><i data-lucide="pencil" style="width:14px;height:14px;color:var(--violet-300);"></i></button>
-                    <button class="btn-icon apt-del-btn" data-apt-id="${a.id}" title="Eliminar"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--danger);"></i></button>
-                </div>
-            </div>
-        </div>`).join('');
+            </div>`;
+        }).join('');
     }
 
     // Horarios disponibles (slots libres) — clickeable para agendar rápido
@@ -1809,18 +1812,22 @@ function renderAgendaDaySidePanel(dateStr) {
     if (apts.length === 0) {
         html += `<div style="color:var(--text-dim);font-size:.8rem;">Sin citas programadas.</div>`;
     } else {
-        html += apts.map(a => `<div class="apt-chip" data-apt-id="${a.id}" style="padding:6px 10px;background:rgba(91,58,138,0.15);border-left:3px solid var(--violet-400);border-radius:4px;margin-bottom:4px;font-size:.82rem;cursor:pointer;transition:background .15s;">
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-                <div>
-                    <strong>${getAppointmentTime(a) || '--:--'}</strong> · ${a.clientName || a.client_name || 'Sin cliente'}<br>
-                    <span style="color:var(--text-dim);font-size:.72rem;">${getAppointmentServices(a).map(s => s.name).join(' + ') || a.service || 'Servicio'}</span>
+        html += apts.map(a => {
+            const emp = db.employees.find(e => String(e.id) === String(getAppointmentEmployeeId(a)));
+            const empColor = emp && emp.color ? emp.color : 'var(--violet-400)';
+            return `<div class="apt-chip" data-apt-id="${a.id}" style="padding:6px 10px;background:rgba(91,58,138,0.15);border-left:3px solid ${empColor};border-radius:4px;margin-bottom:4px;font-size:.82rem;cursor:pointer;transition:background .15s;">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <div>
+                        <strong>${getAppointmentTime(a) || '--:--'}</strong> · ${a.clientName || a.client_name || 'Sin cliente'}<br>
+                        <span style="color:var(--text-dim);font-size:.72rem;">${getAppointmentServices(a).map(s => s.name).join(' + ') || a.service || 'Servicio'}</span>
+                    </div>
+                    <div style="display:flex;gap:6px;">
+                        <button class="btn-icon apt-edit-btn" data-apt-id="${a.id}" title="Editar"><i data-lucide="pencil" style="width:14px;height:14px;color:var(--violet-300);"></i></button>
+                        <button class="btn-icon apt-del-btn" data-apt-id="${a.id}" title="Eliminar"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--danger);"></i></button>
+                    </div>
                 </div>
-                <div style="display:flex;gap:6px;">
-                    <button class="btn-icon apt-edit-btn" data-apt-id="${a.id}" title="Editar"><i data-lucide="pencil" style="width:14px;height:14px;color:var(--violet-300);"></i></button>
-                    <button class="btn-icon apt-del-btn" data-apt-id="${a.id}" title="Eliminar"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--danger);"></i></button>
-                </div>
-            </div>
-        </div>`).join('');
+            </div>`;
+        }).join('');
     }
 
     // Horarios disponibles
@@ -4030,17 +4037,30 @@ async function deleteClient(clientId) {
     }
 }
 
-// Cancelar deuda de una clienta — registra movimiento del día
+// Cancelar deuda de una clienta — abre modal para elegir método
 async function cancelClientDebt(clientId) {
     const client = db.clients.find(c => c.id == clientId);
     if (!client || !(parseFloat(client.debt) > 0)) return;
 
     const debtAmount = parseFloat(client.debt);
-    const ok = await showCustomConfirm(
-        `¿Cancelar la deuda de $${fmt(debtAmount)} de "${client.name}"?\n\nSe registrará como movimiento del día de hoy.`,
-        { title: 'Cancelar deuda', confirmText: 'Cancelar deuda', danger: false }
-    );
-    if (!ok) return;
+    const modal = document.getElementById('modal-debt-payment');
+    const msg = document.getElementById('debt-payment-msg');
+    if (!modal || !msg) return;
+
+    msg.textContent = `Cancelar deuda de $${fmt(debtAmount)} de "${client.name}"`;
+    modal.classList.add('open');
+
+    const confirmBtn = document.getElementById('btn-confirm-debt-payment');
+    confirmBtn.onclick = async () => {
+        const method = document.getElementById('debt-payment-method').value;
+        await processDebtPayment(clientId, debtAmount, method);
+        modal.classList.remove('open');
+    };
+}
+
+async function processDebtPayment(clientId, debtAmount, method) {
+    const client = db.clients.find(c => c.id == clientId);
+    if (!client) return;
 
     try {
         // 1. Registrar transacción de cancelación de deuda
@@ -4052,7 +4072,7 @@ async function cancelClientDebt(clientId) {
             client_name: client.name,
             client_id: client.id,
             detail: `Cancelación de deuda — ${client.name}`,
-            method: 'efectivo',
+            method: method || 'efectivo',
             employee: '',
             employee_id: null
         });
@@ -4091,10 +4111,10 @@ async function cancelClientDebt(clientId) {
         persistCollectionLocal('clients', db.clients);
 
         // 3. Log
-        addClientLog(clientId, `✅ Deuda cancelada: $${fmt(debtAmount)}`);
+        addClientLog(clientId, `✅ Deuda cancelada: $${fmt(debtAmount)} (${method})`);
 
         // 4. Refresh UI
-        showToast(`Deuda de $${fmt(debtAmount)} cancelada — registrada como movimiento de hoy`, 'success');
+        showToast(`Deuda de $${fmt(debtAmount)} cancelada con éxito`, 'success');
         openClientModal(clientId); // refresca la ficha
         if (currentView === 'caja') updateStats();
         if (currentView === 'dashboard') initDashboard();

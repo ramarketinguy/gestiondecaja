@@ -221,9 +221,13 @@ function renderDashboardAgendaResumen() {
         const serviceLabel = typeof getAppointmentServices === 'function'
             ? (getAppointmentServices(apt).map(s => s.name).join(' + ') || apt.service || 'Visita')
             : (apt.service || 'Visita');
+        
+        const emp = db.employees.find(e => String(e.id) === String(getAppointmentEmployeeId(apt)));
+        const empColor = emp && emp.color ? emp.color : 'var(--gold-400)';
+
         list.innerHTML += `
-            <div class="widget-list-item" style="border-left:3px solid var(--gold-400);">
-                <div style="font-weight:700;color:var(--gold-400);min-width:70px;">${aptTime(apt)}</div>
+            <div class="widget-list-item" style="border-left:3px solid ${empColor};">
+                <div style="font-weight:700;color:${empColor};min-width:70px;">${aptTime(apt)}</div>
                 <div class="info" style="flex:1;">
                     <span class="main-text">${apt.clientName || apt.client_name || 'Sin cliente'}</span>
                     <span class="sub-text">${serviceLabel}</span>

@@ -1664,6 +1664,45 @@
             </div>
         </div>
     </div>
+
+    <!-- Modal Advertencia de Agendado (Colisión o Cerrado) -->
+    <div class="modal-overlay" id="modal-appointment-warning">
+        <div class="modal" style="max-width: 420px;">
+            <div class="modal-header">
+                <h2 class="modal-title" style="color:var(--warning);"><i data-lucide="alert-triangle"></i> Advertencia</h2>
+                <button class="modal-close-btn" onclick="document.getElementById('modal-appointment-warning').classList.remove('open')"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <p id="apt-warning-msg" style="margin-bottom:1.5rem; line-height:1.6;"></p>
+                <div style="display:flex; gap:12px;">
+                    <button class="btn btn-ghost" style="flex:1;" onclick="document.getElementById('modal-appointment-warning').classList.remove('open')">Volver y corregir</button>
+                    <button class="btn btn-warning" style="flex:1;" id="btn-confirm-apt-force">Entiendo y agendar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Pago de Deuda -->
+    <div class="modal-overlay" id="modal-debt-payment">
+        <div class="modal" style="max-width: 400px;">
+            <div class="modal-header">
+                <h2 class="modal-title"><i data-lucide="credit-card"></i> Cancelar Deuda</h2>
+                <button class="modal-close-btn" onclick="document.getElementById('modal-debt-payment').classList.remove('open')"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <p id="debt-payment-msg" style="margin-bottom:1rem; font-weight:600;"></p>
+                <div class="form-group">
+                    <label>Método de Pago</label>
+                    <select id="debt-payment-method" class="custom-select">
+                        <option value="efectivo">Efectivo</option>
+                        <option value="tarjeta">Tarjeta</option>
+                        <option value="transferencia">Transferencia</option>
+                    </select>
+                </div>
+                <button class="btn btn-primary" style="width:100%; margin-top:1.5rem;" id="btn-confirm-debt-payment">Confirmar Pago</button>
+            </div>
+        </div>
+    </div>
     <script>
     // ============================================
     // GESTIÓN DE CUENTA Y ACCESOS
