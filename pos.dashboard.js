@@ -226,12 +226,17 @@ function renderDashboardAgendaResumen() {
         const empColor = emp && emp.color ? emp.color : 'var(--gold-400)';
 
         list.innerHTML += `
-            <div class="widget-list-item" style="border-left:3px solid ${empColor};">
-                <div style="font-weight:700;color:${empColor};min-width:70px;">${aptTime(apt)}</div>
-                <div class="info" style="flex:1;">
-                    <span class="main-text">${apt.clientName || apt.client_name || 'Sin cliente'}</span>
-                    <span class="sub-text">${serviceLabel}</span>
+            <div class="widget-list-item" style="border-left:3px solid ${empColor}; display:flex; justify-content:space-between; align-items:center;">
+                <div style="display:flex; align-items:center; flex:1;">
+                    <div style="font-weight:700;color:${empColor};min-width:70px;">${aptTime(apt)}</div>
+                    <div class="info" style="flex:1;">
+                        <span class="main-text">${apt.clientName || apt.client_name || 'Sin cliente'}</span>
+                        <span class="sub-text">${serviceLabel}</span>
+                    </div>
                 </div>
+                <button class="btn-cobrar-chip" onclick="chargeAppointment('${apt.id}')" title="Cobrar">
+                    <i data-lucide="shopping-cart"></i>
+                </button>
             </div>
         `;
     });

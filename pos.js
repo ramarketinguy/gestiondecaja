@@ -1585,13 +1585,14 @@ function renderAgendaSidePanel(dateStr) {
                         <strong>${getAppointmentTime(a) || '--:--'}</strong> · ${a.clientName || a.client_name || 'Sin cliente'}<br>
                         <span style="color:var(--text-dim);font-size:.72rem;">${a.service || 'Servicio s/e'}</span>
                     </div>
-                    <div style="display:flex;gap:6px;">
-                        <button class="btn-icon apt-edit-btn" data-apt-id="${a.id}" title="Editar"><i data-lucide="pencil" style="width:14px;height:14px;color:var(--violet-300);"></i></button>
-                        <button class="btn-icon apt-del-btn" data-apt-id="${a.id}" title="Eliminar"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--danger);"></i></button>
+                        <div style="display:flex;gap:6px;align-items:center;">
+                            <button class="btn-cobrar-chip" onclick="chargeAppointment('${a.id}')" title="Cobrar"><i data-lucide="shopping-cart"></i> Cobrar</button>
+                            <button class="btn-icon apt-edit-btn" data-apt-id="${a.id}" title="Editar"><i data-lucide="pencil" style="width:14px;height:14px;color:var(--violet-300);"></i></button>
+                            <button class="btn-icon apt-del-btn" data-apt-id="${a.id}" title="Eliminar"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--danger);"></i></button>
+                        </div>
                     </div>
-                </div>
-            </div>`;
-        }).join('');
+                </div>`;
+            }).join('');
     }
 
     // Horarios disponibles (slots libres) — clickeable para agendar rápido
@@ -1758,16 +1759,22 @@ function renderAgenda(dateStr) {
         dayApts.forEach(apt => {
             const emp = db.employees.find(e => String(e.id) === String(getAppointmentEmployeeId(apt)));
             const empColor = emp && emp.color ? emp.color : 'var(--accent)';
-            const service = db.services.find(s => s.name === apt.service);
-            const duration = service && service.duration ? service.duration : 60;
+            const duration = getAppointmentDuration(apt);
 
             const eventEl = document.createElement('div');
             eventEl.className = 'agenda-event';
-            eventEl.style.cssText = `background-color:${empColor};border-left:4px solid rgba(0,0,0,0.2);padding:10px 14px;border-radius:8px;margin-bottom:8px;cursor:pointer;transition:transform .15s,box-shadow .15s;`;
+            eventEl.style.cssText = `background-color:${empColor};border-left:4px solid rgba(0,0,0,0.2);padding:10px 14px;border-radius:8px;margin-bottom:8px;cursor:pointer;transition:transform .15s,box-shadow .15s; position:relative;`;
             eventEl.innerHTML = `
-                <div class="event-time" style="font-weight:700;font-size:0.9rem;">${getAppointmentTime(apt) || '--:--'}</div>
-                <div class="event-title" style="font-size:0.85rem;margin-top:2px;">${apt.client_name || apt.clientName || 'Sin cliente'}</div>
-                <div class="event-desc" style="font-size:0.75rem;color:rgba(255,255,255,0.7);margin-top:2px;">${apt.service || 'Servicio'} ${emp ? '· ' + emp.name : ''} · ${duration}min</div>
+                <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                    <div>
+                        <div class="event-time" style="font-weight:700;font-size:0.9rem;">${getAppointmentTime(apt) || '--:--'}</div>
+                        <div class="event-title" style="font-size:0.85rem;margin-top:2px;">${apt.client_name || apt.clientName || 'Sin cliente'}</div>
+                        <div class="event-desc" style="font-size:0.75rem;color:rgba(255,255,255,0.7);margin-top:2px;">${apt.service || 'Servicio'} ${emp ? '· ' + emp.name : ''} · ${duration}min</div>
+                    </div>
+                    <button class="btn-cobrar-chip" onclick="event.stopPropagation(); chargeAppointment('${apt.id}')" title="Cobrar" style="background:rgba(255,255,255,0.2); border:1px solid rgba(255,255,255,0.3);">
+                        <i data-lucide="shopping-cart"></i>
+                    </button>
+                </div>
             `;
             eventEl.onclick = () => openAppointmentDetail(apt);
             eventEl.onmouseenter = () => { eventEl.style.transform = 'scale(1.02)'; eventEl.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)'; };
@@ -6033,3 +6040,69 @@ function showToast(message, type = 'success') {
         setTimeout(() => toast.remove(), 300);
     }, 3000);
 }
+
+// Función global para cobrar una cita desde la agenda
+function chargeAppointment(id) {
+    const apt = db.appointments.find(a => String(a.id) === String(id));
+    if (!apt) return;
+
+    // 1. Navegar a POS (Caja)
+    if (typeof window.navigateTo === 'function') window.navigateTo('pos');
+
+    // 2. Llenar cliente
+    const clientInput = document.getElementById('client-name');
+    if (clientInput) {
+        clientInput.value = apt.clientName || apt.client_name || '';
+        // Buscar el cliente en DB para activar alertas de deuda/seña
+        const clientObj = db.clients.find(c => c.id == apt.clientId) || null;
+        if (clientObj) {
+            window.currentClient = clientObj;
+            const discountAlert = document.getElementById('discount-alert');
+            if (discountAlert) {
+                if (clientObj.balance > 0) {
+                    discountAlert.classList.remove('hidden');
+                    const display = document.getElementById('deposit-amount-display');
+                    if (display) display.textContent = clientObj.balance;
+                } else {
+                    discountAlert.classList.add('hidden');
+                }
+            }
+        }
+    }
+
+    // 3. Llenar concepto/servicio y calcular monto
+    const serviceSelect = document.getElementById('service');
+    if (serviceSelect) {
+        const services = getAppointmentServices(apt);
+        let totalAmount = 0;
+        services.forEach(srvRef => {
+            const srv = db.services.find(s => String(s.id) === String(srvRef.id || srvRef.service_id) || s.name === srvRef.name);
+            if (srv) totalAmount += parseFloat(srv.price) || 0;
+        });
+
+        // Intentamos seleccionar el primer servicio si existe
+        if (services.length > 0) {
+            const firstSrvId = services[0].id || services[0].service_id || db.services.find(s => s.name === services[0].name)?.id;
+            if (firstSrvId) {
+                serviceSelect.value = firstSrvId;
+                if (typeof syncCustomSelect === 'function') syncCustomSelect('service');
+            }
+        }
+        
+        // Monto
+        const amountInput = document.getElementById('amount');
+        if (amountInput) amountInput.value = totalAmount;
+    }
+
+    // 4. Llenar profesional
+    const empSelect = document.getElementById('employee');
+    const empId = getAppointmentEmployeeId(apt);
+    if (empSelect && empId) {
+        empSelect.value = empId;
+        if (typeof syncCustomSelect === 'function') syncCustomSelect('employee');
+    }
+    
+    showToast('Datos de la cita cargados en caja');
+    if (typeof refreshIcons === 'function') refreshIcons();
+}
+window.chargeAppointment = chargeAppointment;
