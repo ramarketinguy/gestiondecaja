@@ -461,6 +461,10 @@ async function loadDataFromSupabase() {
         if (typeof renderStaffPanel === 'function') renderStaffPanel();
         if (typeof initAgendaHandlers === 'function') initAgendaHandlers();
         if (typeof initDashboard === 'function') initDashboard();
+        if (typeof currentView !== 'undefined' && currentView === 'caja') {
+            if (typeof updateStats === 'function') updateStats();
+            if (typeof renderTransactionsTable === 'function') renderTransactionsTable();
+        }
     } else {
         console.error("No se pudo cargar ninguna tabla. Revisa las políticas de RLS en Supabase o si los datos tienen el user_id correcto.");
         showToast('Sin acceso a datos en la nube', 'error');
@@ -2875,9 +2879,20 @@ function renderTransactionsTable() {
     tbody.innerHTML = '';
     const today = new Date();
     // No filtramos por extras para permitir agrupación de 'Mixto'
+    // Log para depuración
+    console.log(`[CAJA] Renderizando tabla. Total transacciones en DB: ${db.transactions.length}`);
+
     const todays = db.transactions.filter(t => {
-        return isSameDay(t.date, today);
+        try {
+            if (!t.date) return false;
+            return isSameDay(t.date, today);
+        } catch(e) { return false; }
     }).reverse();
+
+    console.log(`[CAJA] Transacciones de hoy encontradas: ${todays.length}`);
+    if (todays.length > 0) {
+        console.log('[CAJA] Primera transacción de hoy:', todays[0]);
+    }
 
     if (todays.length === 0) {
         tbody.innerHTML = `<tr><td colspan="6" class="empty-state" style="padding: 2rem;"><p>Caja limpia por ahora.</p></td></tr>`;
@@ -2889,77 +2904,77 @@ function renderTransactionsTable() {
 
     const grouped = {};
     todays.forEach(t => {
-        if (!grouped[t.date]) grouped[t.date] = [];
-        grouped[t.date].push(t);
+        const groupKey = t.date ? String(t.date) : 'no-date';
+        if (!grouped[groupKey]) grouped[groupKey] = [];
+        grouped[groupKey].push(t);
     });
 
     Object.values(grouped).forEach(group => {
-        if (group.length === 1) {
-            const t = group[0];
-            const tipAmount = txIsTip(t) ? t.amount : 0;
-            const rowAmount = txIsTip(t) ? 0 : t.amount;
-            const time = new Date(t.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-            const bCl = t.isIncome
-                ? (t.method==='efectivo' ? 'badge-efectivo'
-                   : t.method==='seña' ? 'badge-seña'
-                   : t.method?.startsWith('tarjeta') ? 'badge-tarjeta'
-                   : 'badge-transferencia')
-                : 'badge-danger';
-            
-            const cleanDetail = (t.detail || 'Servicio').split(' (')[0].split(' — ')[0];
-            const methodLabel = t.method === 'tarjeta_debito' ? 'T.Débito'
-                : t.method === 'tarjeta_credito' ? 'T.Crédito' : t.method;
-
-            if (t.isIncome && !txIsTip(t)) totalIncome += t.amount;
-            if (!t.isIncome) totalEgreso += t.amount;
-
-            tbody.innerHTML += `
-                <tr class="tx-row" data-tx-id="${t.id}" style="cursor:pointer;" title="Ver detalle">
-                    <td style="color:var(--text-dim);white-space:nowrap;">${time}</td>
-                    <td><strong>${t.isIncome ? (t.clientName || 'General') : 'Retiro'}</strong><br><small style="color:var(--text-dim)">${getTxEmployeeName(t)}</small></td>
-                    <td style="max-width:250px;white-space:normal;" title="${t.detail}">${cleanDetail}</td>
-                    <td><span class="badge ${bCl}">${t.isIncome ? 'Ingreso' : 'Egreso'}</span></td>
-                    <td style="color:${tipAmount ? 'var(--gold-400)' : 'var(--text-dim)'}; font-weight:700;" class="text-right">${tipAmount ? '$' + fmt(tipAmount) : '-'}</td>
-                    <td style="color:${t.isIncome ? 'var(--success)' : 'var(--danger)'}; font-weight:700;" class="text-right">
-                        ${t.isIncome ? '+' : '-'}$${fmt(rowAmount)}
-                    </td>
-                </tr>`;
-        } else {
-            // Prefer the non-tip transaction as the displayed "main" so the row
-            // shows the actual service name, not "Propina — ...".
-            const tMain = group.find(g => !txIsTip(g)) || group[0];
-            const time = new Date(tMain.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-            let sumAmount = 0;
-            let methodLabels = [];
-            let tipAmount = 0;
-            let fullDetailHTML = `<div style="display:flex; flex-direction:column; gap:4px; margin-top: 6px; padding-left: 8px; border-left: 2px solid var(--border);">`;
-            
-            group.forEach(g => {
-                if (txIsTip(g)) { tipAmount += g.amount; }
-                else if (g.isIncome) { sumAmount += g.amount; totalIncome += g.amount; }
-                else { sumAmount -= g.amount; totalEgreso += g.amount; }
+        try {
+            if (group.length === 1) {
+                const t = group[0];
+                const tipAmount = txIsTip(t) ? (t.amount || 0) : 0;
+                const rowAmount = txIsTip(t) ? 0 : (t.amount || 0);
+                const time = t.date ? new Date(t.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '--:--';
+                const bCl = t.isIncome
+                    ? (t.method==='efectivo' ? 'badge-efectivo'
+                       : t.method==='seña' ? 'badge-seña'
+                       : t.method?.startsWith('tarjeta') ? 'badge-tarjeta'
+                       : 'badge-transferencia')
+                    : 'badge-danger';
                 
-                const gMethodLabel = g.method === 'tarjeta_debito' ? 'T.Débito' : g.method === 'tarjeta_credito' ? 'T.Crédito' : g.method;
-                methodLabels.push(gMethodLabel);
-                fullDetailHTML += `<div style="font-size:0.75rem; color:var(--text-dim);">${g.detail} <strong style="color:var(--text-primary)">($${fmt(g.amount)} - ${gMethodLabel})</strong></div>`;
-            });
-            fullDetailHTML += `</div>`;
-            
-            const txIds = group.map(g => g.id).join(',');
-            
-            tbody.innerHTML += `
-                <tr class="tx-row" data-tx-ids="${txIds}" style="cursor:pointer;" title="Movimiento Mixto">
-                    <td style="color:var(--text-dim);white-space:nowrap;">${time}</td>
-                    <td><strong>${tMain.isIncome ? (tMain.clientName || 'General') : 'Retiro'}</strong><br><small style="color:var(--text-dim)">${getTxEmployeeName(tMain)}</small></td>
-                    <td>
-                        <div style="font-weight:600;">${tMain.detail.split(' (')[0]} <span class="badge" style="background:rgba(91,58,138,0.1); color:var(--primary-light); border:1px solid var(--primary-light); font-size:0.6rem; padding: 1px 4px;">Mixto</span></div>
-                    </td>
-                    <td><span class="badge" style="background:rgba(255,255,255,0.05); color:var(--text-secondary); border:1px solid var(--border-subtle);">Ingreso</span></td>
-                    <td style="color:${tipAmount ? 'var(--gold-400)' : 'var(--text-dim)'}; font-weight:700;" class="text-right">${tipAmount ? '$' + fmt(tipAmount) : '-'}</td>
-                    <td style="color:${sumAmount >= 0 ? 'var(--success)' : 'var(--danger)'}; font-weight:700;" class="text-right">
-                        ${sumAmount >= 0 ? '+' : '-'}$${fmt(Math.abs(sumAmount))}
-                    </td>
-                </tr>`;
+                const cleanDetail = String(t.detail || 'Servicio').split(' (')[0].split(' — ')[0];
+                const methodLabel = t.method === 'tarjeta_debito' ? 'T.Débito'
+                    : t.method === 'tarjeta_credito' ? 'T.Crédito' : t.method;
+
+                if (t.isIncome && !txIsTip(t)) totalIncome += (t.amount || 0);
+                if (!t.isIncome) totalEgreso += (t.amount || 0);
+
+                tbody.innerHTML += `
+                    <tr class="tx-row" data-tx-id="${t.id}" style="cursor:pointer;" title="Ver detalle">
+                        <td style="color:var(--text-dim);white-space:nowrap;">${time}</td>
+                        <td><strong>${t.isIncome ? (t.clientName || 'General') : 'Retiro'}</strong><br><small style="color:var(--text-dim)">${getTxEmployeeName(t)}</small></td>
+                        <td style="max-width:250px;white-space:normal;" title="${t.detail || ''}">${cleanDetail}</td>
+                        <td><span class="badge ${bCl}">${t.isIncome ? 'Ingreso' : 'Egreso'}</span></td>
+                        <td style="color:${tipAmount ? 'var(--gold-400)' : 'var(--text-dim)'}; font-weight:700;" class="text-right">${tipAmount ? '$' + fmt(tipAmount) : '-'}</td>
+                        <td style="color:${t.isIncome ? 'var(--success)' : 'var(--danger)'}; font-weight:700;" class="text-right">
+                            ${t.isIncome ? '+' : '-'}$${fmt(rowAmount)}
+                        </td>
+                    </tr>`;
+            } else {
+                // Prefer the non-tip transaction as the displayed "main" so the row
+                // shows the actual service name, not "Propina — ...".
+                const tMain = group.find(g => !txIsTip(g)) || group[0];
+                const time = tMain.date ? new Date(tMain.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '--:--';
+                let sumAmount = 0;
+                let tipAmount = 0;
+                
+                group.forEach(g => {
+                    const gAmt = parseFloat(g.amount) || 0;
+                    if (txIsTip(g)) { tipAmount += gAmt; }
+                    else if (g.isIncome) { sumAmount += gAmt; totalIncome += gAmt; }
+                    else { sumAmount -= gAmt; totalEgreso += gAmt; }
+                });
+                
+                const txIds = group.map(g => g.id).join(',');
+                const mainDetail = String(tMain.detail || 'Servicio').split(' (')[0];
+                
+                tbody.innerHTML += `
+                    <tr class="tx-row" data-tx-ids="${txIds}" style="cursor:pointer;" title="Movimiento Mixto">
+                        <td style="color:var(--text-dim);white-space:nowrap;">${time}</td>
+                        <td><strong>${tMain.isIncome ? (tMain.clientName || 'General') : 'Retiro'}</strong><br><small style="color:var(--text-dim)">${getTxEmployeeName(tMain)}</small></td>
+                        <td>
+                            <div style="font-weight:600;">${mainDetail} <span class="badge" style="background:rgba(91,58,138,0.1); color:var(--primary-light); border:1px solid var(--primary-light); font-size:0.6rem; padding: 1px 4px;">Mixto</span></div>
+                        </td>
+                        <td><span class="badge" style="background:rgba(255,255,255,0.05); color:var(--text-secondary); border:1px solid var(--border-subtle);">Ingreso</span></td>
+                        <td style="color:${tipAmount ? 'var(--gold-400)' : 'var(--text-dim)'}; font-weight:700;" class="text-right">${tipAmount ? '$' + fmt(tipAmount) : '-'}</td>
+                        <td style="color:${sumAmount >= 0 ? 'var(--success)' : 'var(--danger)'}; font-weight:700;" class="text-right">
+                            ${sumAmount >= 0 ? '+' : '-'}$${fmt(Math.abs(sumAmount))}
+                        </td>
+                    </tr>`;
+            }
+        } catch (e) {
+            console.error('[CAJA] Error renderizando grupo de transacciones:', e, group);
         }
     });
 
@@ -6067,7 +6082,12 @@ function showToast(message, type = 'success') {
 // Función global para cobrar una cita desde la agenda
 function chargeAppointment(id) {
     const apt = db.appointments.find(a => String(a.id) === String(id));
-    if (!apt) return;
+    if (!apt) {
+        console.error('[COBRAR] No se encontró la cita con ID:', id);
+        return;
+    }
+
+    console.log('[COBRAR] Iniciando cobro de cita:', apt);
 
     // 1. Navegar a POS (Caja)
     if (typeof window.navigateTo === 'function') window.navigateTo('caja');
@@ -6077,7 +6097,7 @@ function chargeAppointment(id) {
     if (clientInput) {
         clientInput.value = apt.clientName || apt.client_name || '';
         // Buscar el cliente en DB para activar alertas de deuda/seña
-        const clientObj = db.clients.find(c => c.id == apt.clientId) || null;
+        const clientObj = db.clients.find(c => c.id == (apt.clientId || apt.client_id)) || null;
         if (clientObj) {
             window.currentClient = clientObj;
             const discountAlert = document.getElementById('discount-alert');
@@ -6097,24 +6117,47 @@ function chargeAppointment(id) {
     const serviceSelect = document.getElementById('service');
     if (serviceSelect) {
         const services = getAppointmentServices(apt);
+        console.log('[COBRAR] Servicios detectados en cita:', services);
+        
         let totalAmount = 0;
-        services.forEach(srvRef => {
-            const srv = db.services.find(s => String(s.id) === String(srvRef.id || srvRef.service_id) || s.name === srvRef.name);
-            if (srv) totalAmount += parseFloat(srv.price) || 0;
+        let firstSrvId = null;
+
+        services.forEach((srvRef, idx) => {
+            const searchName = String(srvRef.name || '').trim().toLowerCase();
+            const srv = db.services.find(s => 
+                String(s.id) === String(srvRef.id || srvRef.service_id) || 
+                (s.name && s.name.trim().toLowerCase() === searchName)
+            );
+            
+            if (srv) {
+                console.log(`[COBRAR] Servicio ${idx + 1} encontrado: "${srv.name}" | Precio: ${srv.price}`);
+                totalAmount += parseFloat(srv.price) || 0;
+                if (!firstSrvId) firstSrvId = srv.id;
+            } else {
+                // Fallback: si no existe en la DB, usamos el precio que viene en el objeto de la cita (si existe)
+                const fallbackPrice = parseFloat(srvRef.price) || 0;
+                console.warn(`[COBRAR] Servicio ${idx + 1} NO encontrado en base de datos: "${srvRef.name}". Usando precio de cita: ${fallbackPrice}`);
+                totalAmount += fallbackPrice;
+            }
         });
 
         // Intentamos seleccionar el primer servicio si existe
-        if (services.length > 0) {
-            const firstSrvId = services[0].id || services[0].service_id || db.services.find(s => s.name === services[0].name)?.id;
-            if (firstSrvId) {
-                serviceSelect.value = firstSrvId;
-                if (typeof syncCustomSelect === 'function') syncCustomSelect('service');
-            }
+        if (firstSrvId) {
+            serviceSelect.value = firstSrvId;
+            console.log('[COBRAR] Seleccionando servicio principal ID:', firstSrvId);
+            if (typeof syncCustomSelect === 'function') syncCustomSelect('service');
+        } else if (services.length > 0) {
+            console.warn('[COBRAR] No se pudo determinar el ID del primer servicio para el dropdown. Dejando selección actual.');
         }
         
         // Monto
         const amountInput = document.getElementById('amount');
-        if (amountInput) amountInput.value = totalAmount;
+        if (amountInput) {
+            amountInput.value = totalAmount;
+            console.log('[COBRAR] Monto total cargado:', totalAmount);
+            // Disparar evento input para que otros cálculos (ej. vuelto) se actualicen si existen
+            amountInput.dispatchEvent(new Event('input'));
+        }
     }
 
     // 4. Llenar profesional
