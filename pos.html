@@ -20,7 +20,7 @@
     <!-- Supabase -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     
-    <link rel="stylesheet" href="pos.css?v=202605131745">
+    <link rel="stylesheet" href="pos.css?v=202605151230">
 </head>
 <body>
 
@@ -343,6 +343,32 @@
                                 <select id="employee" class="custom-select">
                                     <!-- Llenado por JS dinámicamente -->
                                 </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Productos vendidos junto al servicio -->
+                    <div id="sale-products-section" style="padding: 0 1.5rem 1rem;">
+                        <div class="form-alert" style="margin:0;background:rgba(201,168,76,0.06);border-color:rgba(201,168,76,0.18);align-items:flex-start;">
+                            <i data-lucide="shopping-bag"></i>
+                            <div style="flex:1;">
+                                <div style="font-weight:700;margin-bottom:8px;">Productos</div>
+                                <p style="margin:0 0 10px;font-size:0.78rem;color:var(--text-dim);">Si la clienta lleva productos, agregalos aca. El monto recibido debe incluir servicio + productos.</p>
+                                <div class="sale-products-controls">
+                                    <div class="input-wrap">
+                                        <i data-lucide="package"></i>
+                                        <select id="pos-product-select" class="custom-select">
+                                            <option value="" disabled selected style="display:none">Seleccione producto...</option>
+                                        </select>
+                                    </div>
+                                    <div class="input-wrap sale-product-qty">
+                                        <i data-lucide="hash"></i>
+                                        <input type="number" id="pos-product-qty" min="1" step="1" value="1">
+                                    </div>
+                                    <button type="button" class="btn btn-ghost btn-sm" id="btn-add-product-to-sale"><i data-lucide="plus"></i> Agregar</button>
+                                </div>
+                                <div id="pos-products-list" class="sale-products-list"></div>
+                                <div class="sale-products-total">Total productos: <strong id="pos-products-total">$0</strong></div>
                             </div>
                         </div>
                     </div>
@@ -743,6 +769,20 @@
                 <!-- Gestión de Empleadas -->
                 <div class="card" style="grid-column: span 1;">
                     <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+                        <h2 class="card-title"><i data-lucide="package"></i> Productos</h2>
+                        <button class="btn btn-primary btn-sm" onclick="openProductModal()"><i data-lucide="plus"></i> Nuevo</button>
+                    </div>
+                    <div class="card-body" style="padding: 1.5rem;">
+                        <div style="max-height: 350px; overflow-y:auto; padding-right:5px;">
+                            <ul class="task-list" id="settings-products-list">
+                                <!-- Llenado por JS -->
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card" style="grid-column: span 1;">
+                    <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
                         <h2 class="card-title"><i data-lucide="users"></i> Staff</h2>
                         <button class="btn btn-primary btn-sm" onclick="openEmployeeModal()"><i data-lucide="plus"></i> Nuevo</button>
                     </div>
@@ -918,9 +958,21 @@
                         <div class="input-wrap">
                             <i data-lucide="scissors"></i>
                             <select id="apt-service" class="custom-select">
-                                <option value="">Sin especificar</option>
+                                <option value="">Agregar servicio...</option>
                                 <!-- Poblado dinámicamente por JS -->
                             </select>
+                        </div>
+                        <div id="apt-selected-services" class="apt-selected-services"></div>
+                    </div>
+
+                    <div class="form-grid hidden" id="apt-manual-window" style="grid-template-columns: 1fr; padding:0; margin-top: 1rem;">
+                        <div class="form-group">
+                            <label>Hora de fin del turno</label>
+                            <div class="input-wrap">
+                                <i data-lucide="timer"></i>
+                                <input type="time" id="apt-end-time" list="apt-time-options" step="900">
+                            </div>
+                            <p style="font-size:.72rem;color:var(--text-dim);margin-top:4px;">Se pide solo cuando hay mas de un servicio para definir la ventana de tiempo exacta.</p>
                         </div>
                     </div>
 
@@ -1165,6 +1217,49 @@
         </div>
     </div>
 
+    <!-- Modal Producto -->
+    <div class="modal-overlay" id="modal-product">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="product-modal-title">Nuevo Producto</h2>
+                <button class="modal-close-btn" id="modal-product-close"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <form id="fm-product">
+                    <div class="form-group">
+                        <label>Nombre del Producto</label>
+                        <div class="input-wrap">
+                            <i data-lucide="package"></i>
+                            <input type="text" id="product-name" placeholder="Ej: Shampoo hidratante" required>
+                        </div>
+                    </div>
+                    <div class="form-grid" style="grid-template-columns: 1fr 1fr; margin-top: 1rem; padding:0;">
+                        <div class="form-group">
+                            <label>Precio ($)</label>
+                            <div class="input-wrap">
+                                <i data-lucide="dollar-sign"></i>
+                                <input type="number" id="product-price" placeholder="0" min="0" step="0.01" required>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Stock opcional</label>
+                            <div class="input-wrap">
+                                <i data-lucide="boxes"></i>
+                                <input type="number" id="product-stock" placeholder="Sin controlar" min="0" step="1">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer" style="margin-top: 2rem;">
+                        <button type="submit" class="btn btn-primary" style="width: 100%;">
+                            <i data-lucide="save"></i>
+                            <span>Guardar Producto</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
     <div class="toast-container" id="toast-container"></div>
 
     <!-- Modal Rápido: Crear Nueva Clienta desde Caja -->
@@ -1380,13 +1475,13 @@
 
     <!-- Scripts del Sistema -->
     <script src="config.js?v=202604260900"></script>
-    <script src="state.js?v=202605131745"></script>
+    <script src="state.js?v=202605151230"></script>
     <script src="validation.js?v=202604260900"></script>
     <script src="auth.js?v=202604260900"></script>
-    <script src="supabase-helpers.js?v=202604260900"></script>
+    <script src="supabase-helpers.js?v=202605151230"></script>
     <script src="clients.js?v=202604260900"></script>
-    <script src="pos.js?v=202605131745"></script>
-    <script src="pos.dashboard.js?v=202605131630"></script>
+    <script src="pos.js?v=202605151230"></script>
+    <script src="pos.dashboard.js?v=202605151230"></script>
     <script src="pos.services.js?v=202604260900"></script>
     <script src="pos.config.js?v=202605131745"></script>
     <!-- Modal: Cierre de Caja (Formulario) -->

@@ -88,7 +88,7 @@ function renderDashboardTareas() {
             if (userId) payload.user_id = userId;
             let saved = null;
             try {
-                const { data, error } = await window.supabaseClient.from('tasks').insert([payload]).select();
+                const { data, error } = await insertRowsSafe('tasks', payload);
                 if (error) throw error;
                 saved = data?.[0] || null;
             } catch (err) {
@@ -130,7 +130,7 @@ function renderDashboardTareas() {
             if (task && window.supabaseClient) {
                 task.completed = e.target.checked;
                 try {
-                    const { error } = await window.supabaseClient.from('tasks').update({ completed: task.completed }).eq('id', id);
+                    const { error } = await updateRowSafe('tasks', id, { completed: task.completed });
                     if (error) throw error;
                     renderDashboardTareas();
                     persistCollectionLocal('tasks', db.tasks);
@@ -149,7 +149,7 @@ function renderDashboardTareas() {
         btn.onclick = async (e) => {
             const id = e.currentTarget.dataset.id;
                 try {
-                    const { error } = await window.supabaseClient.from('tasks').delete().eq('id', id);
+                    const { error } = await deleteRowSafe('tasks', id);
                     if (error) throw error;
                     db.tasks = tasks.filter(x => x.id != id);
                     persistCollectionLocal('tasks', db.tasks);
@@ -218,12 +218,15 @@ function renderDashboardAgendaResumen() {
     }
 
     todaysApts.forEach(apt => {
+        const serviceLabel = typeof getAppointmentServices === 'function'
+            ? (getAppointmentServices(apt).map(s => s.name).join(' + ') || apt.service || 'Visita')
+            : (apt.service || 'Visita');
         list.innerHTML += `
             <div class="widget-list-item" style="border-left:3px solid var(--gold-400);">
                 <div style="font-weight:700;color:var(--gold-400);min-width:70px;">${aptTime(apt)}</div>
                 <div class="info" style="flex:1;">
                     <span class="main-text">${apt.clientName || apt.client_name || 'Sin cliente'}</span>
-                    <span class="sub-text">${apt.service || 'Visita'}</span>
+                    <span class="sub-text">${serviceLabel}</span>
                 </div>
             </div>
         `;

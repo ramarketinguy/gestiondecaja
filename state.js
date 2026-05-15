@@ -9,6 +9,7 @@ let db = {
     appointments: [],
     tasks: [],
     services: [],
+    products: [],
     employees: [],
     closures: [],
     clientFiles: []
@@ -155,6 +156,7 @@ function resetState() {
         appointments: [],
         tasks: [],
         services: [],
+        products: [],
         employees: [],
         closures: [],
         clientFiles: []

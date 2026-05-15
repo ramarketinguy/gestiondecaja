@@ -17,6 +17,9 @@ let charts = {};
 let _pendingAptClientName = null;
 let _clientModalSavedCallback = null;
 let _reopenAgendaAfterSave = false;
+let appointmentSelectedServiceIds = [];
+let posSelectedProducts = [];
+let editingProductId = null;
 
 // getUserId() definido en state.js
 
@@ -57,6 +60,65 @@ function getAppointmentEmployeeId(apt) {
     return apt?.employeeId || apt?.employee_id || null;
 }
 
+function normalizeTimeValue(value) {
+    return (value || '').toString().slice(0, 5);
+}
+
+function getAppointmentEndTime(apt) {
+    return normalizeTimeValue(apt?.endTime || apt?.end_time || '');
+}
+
+function minutesBetweenTimes(startTime, endTime) {
+    if (!startTime || !endTime) return null;
+    const [sh, sm] = startTime.split(':').map(Number);
+    const [eh, em] = endTime.split(':').map(Number);
+    if ([sh, sm, eh, em].some(Number.isNaN)) return null;
+    const start = sh * 60 + sm;
+    const end = eh * 60 + em;
+    return end > start ? end - start : null;
+}
+
+function normalizeAppointmentServices(raw) {
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw.filter(Boolean);
+    if (typeof raw === 'string') {
+        try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) return parsed.filter(Boolean);
+        } catch {
+            return raw.split(/\s*\+\s*|\s*,\s*/).filter(Boolean).map(name => ({ name }));
+        }
+    }
+    return [];
+}
+
+function getAppointmentServices(apt) {
+    const services = normalizeAppointmentServices(apt?.services);
+    if (services.length > 0) return services;
+    return apt?.service ? [{ name: apt.service }] : [];
+}
+
+function getAppointmentDuration(apt) {
+    const explicit = parseInt(apt?.duration || apt?.duration_minutes, 10);
+    if (!Number.isNaN(explicit) && explicit > 0) return explicit;
+
+    const startTime = getAppointmentTime(apt);
+    const endTime = getAppointmentEndTime(apt);
+    const manual = minutesBetweenTimes(startTime, endTime);
+    if (manual) return manual;
+
+    const services = getAppointmentServices(apt);
+    const summed = services.reduce((total, srvRef) => {
+        const srv = db.services.find(s => String(s.id) === String(srvRef.id || srvRef.service_id) || s.name === srvRef.name);
+        return total + (parseInt(srv?.duration, 10) || 0);
+    }, 0);
+    return summed > 0 ? summed : 60;
+}
+
+function getProductPrice(product) {
+    return parseFloat(product?.price) || 0;
+}
+
 function getTxEmployeeName(tx) {
     if (!tx) return '';
     if (tx.employee) return tx.employee;
@@ -68,12 +130,16 @@ function txIsTip(tx) {
     return isTipTransaction(tx);
 }
 
+function fmt(n) {
+    return Number(n || 0).toLocaleString('es-UY', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
+
 // ==========================================
 // 0. INICIALIZACIÓN DE EMERGENCIA - VERSIÓN SIMPLIFICADA
 // ==========================================
 window.db = window.db || {
     transactions: [], clients: [], appointments: [],
-    tasks: [], services: [], employees: [], closures: [], clientFiles: []
+    tasks: [], services: [], products: [], employees: [], closures: [], clientFiles: []
 };
 
 // Función de inicialización simple que llama a todas las demás
@@ -230,16 +296,21 @@ async function loadDataFromSupabase() {
             detail: t.detail,
             method: t.method,
             employee: t.employee,
-            employeeId: t.employee_id || null
+            employeeId: t.employee_id || null,
+            products: normalizeAppointmentServices(t.products),
+            productTotal: parseFloat(t.product_total) || 0
         })},
         { name: 'appointments', stateKey: 'appointments', transform: a => ({
             ...a,
             date: a.apt_date || a.date,
             time: (a.apt_time || a.time || '').slice(0, 5),
+            endTime: normalizeTimeValue(a.end_time || a.endTime || ''),
+            duration: a.duration ? parseInt(a.duration, 10) : null,
             clientId: a.client_id,
             clientName: a.client_name,
             serviceId: a.service_id,
-            employeeId: a.employee_id || a.employeeId
+            employeeId: a.employee_id || a.employeeId,
+            services: normalizeAppointmentServices(a.services)
         })},
         { name: 'tasks', stateKey: 'tasks', order: { col: 'created_at', asc: true } },
         { name: 'services', stateKey: 'services', transform: s => ({
@@ -247,6 +318,11 @@ async function loadDataFromSupabase() {
             priceType: s.price_type || 'variable',
             price: parseFloat(s.price) || null,
             duration: s.duration ? parseInt(s.duration) : null
+        })},
+        { name: 'products', stateKey: 'products', transform: p => ({
+            ...p,
+            price: parseFloat(p.price) || 0,
+            stock: p.stock === null || p.stock === undefined ? null : parseFloat(p.stock)
         })},
         { name: 'employees', stateKey: 'employees', transform: e => ({
             ...e,
@@ -285,7 +361,7 @@ async function loadDataFromSupabase() {
                 error = retry.error;
             }
 
-            if (!error && userId && Array.isArray(data) && data.length === 0 && ['clients', 'services', 'employees', 'appointments', 'transactions', 'tasks'].includes(table.name)) {
+            if (!error && userId && Array.isArray(data) && data.length === 0 && ['clients', 'services', 'products', 'employees', 'appointments', 'transactions', 'tasks'].includes(table.name)) {
                 console.warn(`[SYNC] ${table.name}: sin filas con user_id. Reintentando lectura legacy sin filtro.`);
                 let legacyQuery = client.from(table.name).select('*');
                 if (table.order) legacyQuery = legacyQuery.order(table.order.col, { ascending: table.order.asc });
@@ -322,6 +398,11 @@ async function loadDataFromSupabase() {
 
     if (successCount > 0) {
         if (typeof initDashboard === 'function') initDashboard();
+        if (typeof renderServicesList === 'function') renderServicesList();
+        if (typeof renderProductsList === 'function') renderProductsList();
+        if (typeof renderEmployeesList === 'function') renderEmployeesList();
+        if (typeof updateFormSelects === 'function') updateFormSelects();
+        if (typeof renderStaffPanel === 'function') renderStaffPanel();
     } else {
         console.error("No se pudo cargar ninguna tabla. Revisa las políticas de RLS en Supabase o si los datos tienen el user_id correcto.");
         showToast('Sin acceso a datos en la nube', 'error');
@@ -825,12 +906,7 @@ function initAgenda() {
         initAptClientAutocomplete();
 
         // Cuando se elige un servicio en la agenda, si no tiene duración definida, pedir via modal
-        document.getElementById('apt-service').addEventListener('change', (ev) => {
-            const srv = db.services.find(s => s.name === ev.target.value);
-            if (srv && !srv.duration) {
-                openServiceDurationModal(srv);
-            }
-        });
+        document.getElementById('apt-service').addEventListener('change', addAppointmentServiceFromSelect);
 
         // Botón "+ Nuevo servicio" dentro del modal de agenda
         const btnAptSrv = document.getElementById('btn-apt-quick-service');
@@ -874,6 +950,7 @@ function openAgendarModal(preselectedDate = null, preselectedTime = null) {
     }
     
     document.getElementById('modal-appointment').classList.add('open');
+    appointmentSelectedServiceIds = [];
     const today = new Date();
     const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
     const dateInput = document.getElementById('apt-date');
@@ -898,6 +975,7 @@ function openAgendarModal(preselectedDate = null, preselectedTime = null) {
         aptSel.value = '';
         syncCustomSelect('apt-service');
     }
+    renderAppointmentServiceSelection();
     const repeatSel = document.getElementById('apt-repeat');
     if (repeatSel) { repeatSel.value = 'none'; syncCustomSelect('apt-repeat'); }
     const repeatCount = document.getElementById('apt-repeat-count');
@@ -920,6 +998,8 @@ function closeAgendarModal() {
     // Reset visual del custom select de servicio
     const aptSel = document.getElementById('apt-service');
     if (aptSel) { aptSel.value = ''; syncCustomSelect('apt-service'); }
+    appointmentSelectedServiceIds = [];
+    renderAppointmentServiceSelection();
     // Restaurar título del modal
     const title = document.getElementById('apt-modal-title');
     if (title) title.textContent = 'Agendar Cita';
@@ -935,7 +1015,14 @@ async function editAppointment(id) {
     document.getElementById('apt-client-name').value = apt.clientName || apt.client_name || '';
     aptCurrentClient = db.clients.find(c => c.id == apt.clientId) || null;
     const aptSrv = document.getElementById('apt-service');
-    if (aptSrv) { aptSrv.value = apt.service || ''; syncCustomSelect('apt-service'); }
+    const serviceRefs = getAppointmentServices(apt);
+    appointmentSelectedServiceIds = serviceRefs
+        .map(ref => db.services.find(s => String(s.id) === String(ref.id || ref.service_id) || s.name === ref.name)?.id)
+        .filter(Boolean);
+    if (aptSrv) { aptSrv.value = ''; syncCustomSelect('apt-service'); }
+    renderAppointmentServiceSelection();
+    const endInput = document.getElementById('apt-end-time');
+    if (endInput) endInput.value = getAppointmentEndTime(apt);
     document.getElementById('apt-notes').value = apt.notes || '';
     const aptEmp = document.getElementById('apt-employee');
     const aptEmpId = getAppointmentEmployeeId(apt);
@@ -1030,6 +1117,75 @@ function initAptClientAutocomplete() {
     });
 }
 
+function getSelectedAppointmentServices() {
+    return appointmentSelectedServiceIds
+        .map(id => db.services.find(s => String(s.id) === String(id)))
+        .filter(Boolean);
+}
+
+function addAppointmentServiceFromSelect() {
+    const select = document.getElementById('apt-service');
+    const serviceId = select?.value;
+    const service = db.services.find(s => String(s.id) === String(serviceId));
+    if (!service) return;
+
+    if (!appointmentSelectedServiceIds.some(id => String(id) === String(service.id))) {
+        appointmentSelectedServiceIds.push(service.id);
+    }
+
+    select.value = '';
+    syncCustomSelect('apt-service');
+    renderAppointmentServiceSelection();
+    if (appointmentSelectedServiceIds.length === 1 && !service.duration) openServiceDurationModal(service);
+}
+
+function removeAppointmentService(serviceId) {
+    appointmentSelectedServiceIds = appointmentSelectedServiceIds.filter(id => String(id) !== String(serviceId));
+    renderAppointmentServiceSelection();
+}
+
+function formatServiceSelectionLabel(service) {
+    const duration = parseInt(service?.duration, 10);
+    return `${service?.name || 'Servicio'}${duration ? ` (${duration} min)` : ''}`;
+}
+
+function renderAppointmentServiceSelection() {
+    const list = document.getElementById('apt-selected-services');
+    const manualWrap = document.getElementById('apt-manual-window');
+    const endInput = document.getElementById('apt-end-time');
+    if (!list) return;
+
+    const selected = getSelectedAppointmentServices();
+    if (selected.length === 0) {
+        list.innerHTML = '<span style="color:var(--text-dim);font-size:0.82rem">Sin servicios agregados.</span>';
+    } else {
+        list.innerHTML = selected.map(service => `
+            <div class="apt-service-chip">
+                <span>${formatServiceSelectionLabel(service)}</span>
+                <button type="button" class="btn-icon btn-remove-apt-service" data-id="${service.id}"><i data-lucide="x"></i></button>
+            </div>
+        `).join('');
+    }
+
+    const needsManualWindow = selected.length > 1;
+    if (manualWrap) manualWrap.classList.toggle('hidden', !needsManualWindow);
+    if (!needsManualWindow && endInput) endInput.value = '';
+
+    list.querySelectorAll('.btn-remove-apt-service').forEach(btn => {
+        btn.onclick = () => removeAppointmentService(btn.dataset.id);
+    });
+    refreshIcons();
+}
+
+function addMinutesToTime(time, minutes) {
+    const [h, m] = time.split(':').map(Number);
+    if ([h, m].some(Number.isNaN)) return '';
+    const total = h * 60 + m + minutes;
+    const hh = Math.floor((total % (24 * 60)) / 60);
+    const mm = total % 60;
+    return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
 async function saveAppointment() {
     const nameInput = document.getElementById('apt-client-name').value.trim();
     const dateInput = document.getElementById('apt-date').value;
@@ -1047,28 +1203,46 @@ async function saveAppointment() {
     }
 
     const aptEmployeeId = document.getElementById('apt-employee')?.value || null;
-    const serviceVal = document.getElementById('apt-service')?.value || '';
+    const selectedServices = getSelectedAppointmentServices();
+    const serviceVal = selectedServices.map(s => s.name).join(' + ');
+    const servicePayload = selectedServices.map(s => ({
+        id: s.id,
+        name: s.name,
+        duration: s.duration ? parseInt(s.duration, 10) : null
+    }));
+    const manualEndTime = document.getElementById('apt-end-time')?.value || '';
+    let duration = selectedServices.reduce((sum, s) => sum + (parseInt(s.duration, 10) || 0), 0);
+    let endTime = '';
 
-    // Collision Detection Logic
-    const selectedService = db.services.find(s => s.name === serviceVal);
-    const duration = selectedService && selectedService.duration ? selectedService.duration : 60;
+    if (selectedServices.length > 1) {
+        const manualDuration = minutesBetweenTimes(timeInput, manualEndTime);
+        if (!manualDuration) {
+            showToast('Para mas de un servicio, indique la hora de fin del turno.', 'error');
+            return;
+        }
+        duration = manualDuration;
+        endTime = manualEndTime;
+    } else {
+        duration = duration > 0 ? duration : 60;
+        endTime = addMinutesToTime(timeInput, duration);
+    }
+
+    // Collision Detection Logic. Se permite mismo horario exacto para varias clientas.
     const start = new Date(`${dateInput}T${timeInput}`);
     const end = new Date(start.getTime() + duration * 60000);
 
     const hasCollision = db.appointments.some(a => {
+        if (editingAppointmentId && String(a.id) === String(editingAppointmentId)) return false;
+        if (!aptEmployeeId) return false;
         if (String(getAppointmentEmployeeId(a) || '') !== String(aptEmployeeId || '') || getAppointmentDate(a) !== dateInput) return false;
+        if (getAppointmentTime(a) === timeInput) return false;
         const aStart = new Date(`${getAppointmentDate(a)}T${getAppointmentTime(a)}`);
-        const aService = db.services.find(s => s.name === a.service);
-        const aDuration = aService && aService.duration ? aService.duration : 60;
+        const aDuration = getAppointmentDuration(a);
         const aEnd = new Date(aStart.getTime() + aDuration * 60000);
         return (start < aEnd && end > aStart);
     });
 
-    if (hasCollision) {
-        if (!confirm('¡Atención! Este horario ya está ocupado para esta funcionaria. ¿Deseas agendar de todas formas?')) {
-            return;
-        }
-    }
+    // Se elimina el bloqueo por colisión para permitir agendar a varias clientas con la misma funcionaria.
 
     // Crear clienta si no existe
     if (!aptCurrentClient) {
@@ -1083,6 +1257,9 @@ async function saveAppointment() {
         apt_date: dateInput,
         apt_time: timeInput,
         service: serviceVal,
+        services: servicePayload,
+        duration,
+        end_time: endTime,
         notes: document.getElementById('apt-notes').value,
         employee_id: aptEmployeeId
     });
@@ -1095,7 +1272,23 @@ async function saveAppointment() {
             // Para update, no enviar user_id (es inmutable)
             const updateData = { ...aptData };
             delete updateData.user_id;
-            res = await window.supabaseClient.from('appointments').update(updateData).eq('id', editingAppointmentId).select();
+            res = await updateRowSafe('appointments', editingAppointmentId, updateData);
+            if (res.error || !res.data?.[0]) {
+                res = {
+                    data: [{
+                        ...updateData,
+                        id: editingAppointmentId,
+                        date: updateData.apt_date,
+                        time: updateData.apt_time,
+                        clientId: updateData.client_id,
+                        clientName: updateData.client_name,
+                        employeeId: updateData.employee_id,
+                        endTime: updateData.end_time,
+                        pendingSync: true
+                    }],
+                    error: null
+                };
+            }
             if (res.error) {
                 // Retry sin campos problemáticos
                 const m = res.error.message?.match(/Could not find the '(\w+)' column/i);
@@ -1111,8 +1304,8 @@ async function saveAppointment() {
             for (const repeatDate of repeatDates) {
                 const row = { ...aptData, apt_date: repeatDate };
                 const insertRes = await insertAppointmentSafe(row);
-                if (insertRes.error || !insertRes.data || !insertRes.data[0]) {
-                    firstError = insertRes.error || { message: 'No se pudo guardar en Supabase' };
+                if (insertRes.error) {
+                    firstError = insertRes.error;
                     savedRows.push({
                         ...row,
                         id: createLocalId('apt'),
@@ -1121,10 +1314,24 @@ async function saveAppointment() {
                         clientId: row.client_id,
                         clientName: row.client_name,
                         employeeId: row.employee_id,
+                        services: row.services,
+                        duration: row.duration,
+                        endTime: row.end_time,
                         pendingSync: true
                     });
                 } else {
-                    savedRows.push(insertRes.data[0]);
+                    savedRows.push(insertRes.data?.[0] || {
+                        ...row,
+                        id: createLocalId('apt'),
+                        date: row.apt_date,
+                        time: row.apt_time,
+                        clientId: row.client_id,
+                        clientName: row.client_name,
+                        employeeId: row.employee_id,
+                        services: row.services,
+                        duration: row.duration,
+                        endTime: row.end_time
+                    });
                 }
             }
             res = { data: savedRows, error: firstError && savedRows.length === 0 ? firstError : null };
@@ -1143,7 +1350,10 @@ async function saveAppointment() {
             clientId: raw.client_id || raw.clientId,
             clientName: raw.client_name || raw.clientName,
             serviceId: raw.service_id || raw.serviceId,
-            employeeId: raw.employee_id || raw.employeeId
+            employeeId: raw.employee_id || raw.employeeId,
+            services: normalizeAppointmentServices(raw.services),
+            duration: raw.duration ? parseInt(raw.duration, 10) : duration,
+            endTime: normalizeTimeValue(raw.end_time || raw.endTime || endTime)
         }));
         const raw = savedAppointments[0];
         // Apply same transform as loadDataFromSupabase so mapped fields (date, time, clientId, etc.) exist
@@ -1330,8 +1540,7 @@ function renderAgendaSidePanel(dateStr) {
             apts.forEach(a => {
                 if (!getAppointmentTime(a)) return;
                 const sTime = toMin(getAppointmentTime(a));
-                const srv = db.services.find(s => s.name === a.service);
-                const duration = srv && srv.duration ? parseInt(srv.duration) : 30;
+                const duration = getAppointmentDuration(a);
                 const eTime = sTime + duration;
                 
                 if (t >= sTime && t < eTime) {
@@ -1425,9 +1634,10 @@ function renderAgendaSidePanel(dateStr) {
             const apt = db.appointments.find(a => String(a.id) === String(id));
             if (!apt) return;
             if (!confirm(`¿Eliminar la cita de ${apt.clientName || apt.client_name} el ${getAppointmentDate(apt)} a las ${getAppointmentTime(apt)}?`)) return;
-            const { error } = await window.supabaseClient.from('appointments').delete().eq('id', id);
-            if (error) { console.error(error); showToast('Error eliminando cita: ' + error.message, 'error'); return; }
+            const { error } = await deleteRowSafe('appointments', id);
+            if (error && !String(id).startsWith('apt_')) { console.error(error); showToast('Error eliminando cita: ' + error.message, 'error'); return; }
             db.appointments = db.appointments.filter(a => String(a.id) !== String(id));
+            persistCollectionLocal('appointments', db.appointments);
             showToast('Cita eliminada');
             renderAgendaSidePanel(dateStr);
             renderAgendaMonth();
@@ -1468,8 +1678,8 @@ function renderAgenda(dateStr) {
     dayApts.forEach(apt => {
         const emp = db.employees.find(e => String(e.id) === String(getAppointmentEmployeeId(apt)));
         const empColor = emp && emp.color ? emp.color : 'var(--accent)';
-        const service = db.services.find(s => s.name === apt.service);
-        const duration = service && service.duration ? service.duration : 60;
+        const duration = getAppointmentDuration(apt);
+        const serviceLabel = getAppointmentServices(apt).map(s => s.name).join(' + ') || apt.service || 'Servicio';
 
         const eventEl = document.createElement('div');
         eventEl.className = 'agenda-event';
@@ -1515,6 +1725,7 @@ function openServiceDurationModal(srv) {
         const mins = parseInt(document.getElementById('srvdur-input').value);
         if (!isNaN(mins) && mins > 0) {
             srv.duration = mins;
+            renderAppointmentServiceSelection();
             const persist = document.getElementById('srvdur-persist').checked;
             if (persist && srv.id) {
                 // Guardar en Supabase (con retry si falta columna)
@@ -1564,6 +1775,7 @@ function initPOS() {
         const tipSectionEl = document.getElementById('tip-section');
         const tipCheckboxEl = document.getElementById('is-tip');
         const tipFieldsEl = document.getElementById('tip-fields');
+        const saleProductsSectionEl = document.getElementById('sale-products-section');
         if (toggle.checked) {
             incomeFields.classList.remove('hidden');
             expenseFields.classList.add('hidden');
@@ -1572,6 +1784,7 @@ function initPOS() {
             label.style.color = "var(--success)";
             if (splitToggleRowEl) splitToggleRowEl.classList.remove('hidden');
             if (tipSectionEl) tipSectionEl.classList.remove('hidden');
+            if (saleProductsSectionEl) saleProductsSectionEl.classList.remove('hidden');
         } else {
             incomeFields.classList.add('hidden');
             expenseFields.classList.remove('hidden');
@@ -1586,6 +1799,8 @@ function initPOS() {
             if (tipSectionEl) tipSectionEl.classList.add('hidden');
             if (tipCheckboxEl) tipCheckboxEl.checked = false;
             if (tipFieldsEl) tipFieldsEl.classList.add('hidden');
+            if (saleProductsSectionEl) saleProductsSectionEl.classList.add('hidden');
+            resetPosProducts();
             clearClientSelection();
         }
     });
@@ -1658,12 +1873,15 @@ function initPOS() {
         const srvId = e.target.value;
         const srv = db.services.find(s => s.id == srvId);
         if (srv && srv.priceType === 'fijo') {
-            document.getElementById('amount').value = srv.price;
+            document.getElementById('amount').value = (parseFloat(srv.price) || 0) + getPosProductTotal();
         } else {
             document.getElementById('amount').value = '';
         }
         // Duración solo informativa — no mostrar toast al registrar cobro
     });
+
+    const addProductBtn = document.getElementById('btn-add-product-to-sale');
+    if (addProductBtn) addProductBtn.addEventListener('click', addProductToSale);
 
     initPOSClientAutocomplete();
     document.getElementById('btn-save-transaction').addEventListener('click', saveTransaction);
@@ -1691,6 +1909,7 @@ function initPOS() {
     });
 
     updateFormSelects();
+    renderPosProducts();
     updateStats();
 }
 
@@ -1698,15 +1917,18 @@ function updateFormSelects() {
     const serviceSelect = document.getElementById('service');
     const aptServiceSelect = document.getElementById('apt-service');
     const employeeSelect = document.getElementById('employee');
+    const productSelect = document.getElementById('pos-product-select');
 
     // POS — select de servicio (guarda el ID)
-    serviceSelect.innerHTML = '<option value="" disabled selected style="display:none">Seleccione servicio...</option>';
-    db.services.forEach(s => {
-        const opt = document.createElement('option');
-        opt.value = s.id;
-        opt.textContent = `${s.name} ${s.priceType === 'fijo' ? '($' + s.price + ')' : '(Variable)'}`;
-        serviceSelect.appendChild(opt);
-    });
+    if (serviceSelect) {
+        serviceSelect.innerHTML = '<option value="" disabled selected style="display:none">Seleccione servicio...</option>';
+        db.services.forEach(s => {
+            const opt = document.createElement('option');
+            opt.value = s.id;
+            opt.textContent = `${s.name} ${s.priceType === 'fijo' ? '($' + s.price + ')' : '(Variable)'}`;
+            serviceSelect.appendChild(opt);
+        });
+    }
 
     // Agenda — select de servicio (guarda el nombre, que es lo que se almacena en appointments)
     if (aptServiceSelect) {
@@ -1714,23 +1936,39 @@ function updateFormSelects() {
         aptServiceSelect.innerHTML = '<option value="">Sin especificar</option>';
         db.services.forEach(s => {
             const opt = document.createElement('option');
-            opt.value = s.name;
+            opt.value = s.id;
             opt.textContent = s.name;
             aptServiceSelect.appendChild(opt);
         });
         if (prevVal) aptServiceSelect.value = prevVal;
     }
 
+    if (productSelect) {
+        const prevProduct = productSelect.value;
+        productSelect.innerHTML = '<option value="" disabled selected style="display:none">Seleccione producto...</option>';
+        db.products.forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.id;
+            opt.textContent = `${p.name} ($${fmt(getProductPrice(p))})`;
+            productSelect.appendChild(opt);
+        });
+        if (prevProduct && db.products.some(p => String(p.id) === String(prevProduct))) {
+            productSelect.value = prevProduct;
+        }
+    }
+
     // Select de empleada
-    const prevEmployee = employeeSelect.value;
-    employeeSelect.innerHTML = '<option value="" disabled selected style="display:none">Seleccione empleada...</option>';
-    db.employees.forEach(e => {
-        const opt = document.createElement('option');
-        opt.value = e.id;
-        opt.textContent = e.name;
-        employeeSelect.appendChild(opt);
-    });
-    if (prevEmployee && db.employees.some(e => String(e.id) === String(prevEmployee))) employeeSelect.value = prevEmployee;
+    if (employeeSelect) {
+        const prevEmployee = employeeSelect.value;
+        employeeSelect.innerHTML = '<option value="" disabled selected style="display:none">Seleccione empleada...</option>';
+        db.employees.forEach(e => {
+            const opt = document.createElement('option');
+            opt.value = e.id;
+            opt.textContent = e.name;
+            employeeSelect.appendChild(opt);
+        });
+        if (prevEmployee && db.employees.some(e => String(e.id) === String(prevEmployee))) employeeSelect.value = prevEmployee;
+    }
 
     // Select de empleada en modal de agenda (guarda el ID para scope de bloqueos)
     const aptEmpSelect = document.getElementById('apt-employee');
@@ -1899,7 +2137,7 @@ function initQuickModals() {
         const quickServiceData = withCurrentUser({
             name, price_type: hasPrice ? 'fijo' : 'variable', price: hasPrice ? priceVal : null
         });
-        const { data, error } = await window.supabaseClient.from('services').insert([quickServiceData]).select();
+        const { data, error } = await insertRowsSafe('services', quickServiceData);
         qsSave.disabled = false;
         if (error || !data?.[0]) {
             console.error('[QuickService] Insert Error:', error);
@@ -1933,7 +2171,8 @@ function initQuickModals() {
             // Si la agenda está abierta, seleccionar también ahí
             const aptSel = document.getElementById('apt-service');
             if (aptSel) {
-                aptSel.value = newSrv.name;
+                aptSel.value = newSrv.id;
+                addAppointmentServiceFromSelect();
                 syncCustomSelect('apt-service');
             }
         }, 150);
@@ -1953,6 +2192,78 @@ function clearClientSelection() {
     document.getElementById('client-name').value = '';
     document.getElementById('discount-alert').classList.add('hidden');
     document.getElementById('apply-discount').checked = false;
+}
+
+function getPosProductTotal() {
+    return posSelectedProducts.reduce((sum, item) => sum + (getProductPrice(item) * (parseFloat(item.qty) || 1)), 0);
+}
+
+function syncSaleAmountFromFixedService() {
+    const serviceId = document.getElementById('service')?.value;
+    const amountInput = document.getElementById('amount');
+    const srv = db.services.find(s => String(s.id) === String(serviceId));
+    if (amountInput && srv && srv.priceType === 'fijo') {
+        amountInput.value = (parseFloat(srv.price) || 0) + getPosProductTotal();
+    }
+}
+
+function renderPosProducts() {
+    const list = document.getElementById('pos-products-list');
+    const totalEl = document.getElementById('pos-products-total');
+    if (!list) return;
+
+    if (posSelectedProducts.length === 0) {
+        list.innerHTML = '<span style="color:var(--text-dim);font-size:0.82rem">Sin productos agregados.</span>';
+    } else {
+        list.innerHTML = posSelectedProducts.map(item => {
+            const qty = parseFloat(item.qty) || 1;
+            const total = getProductPrice(item) * qty;
+            return `
+                <div class="sale-product-row">
+                    <span>${item.name} x${qty}</span>
+                    <strong>$${fmt(total)}</strong>
+                    <button type="button" class="btn-icon btn-remove-sale-product" data-id="${item.id}"><i data-lucide="x"></i></button>
+                </div>
+            `;
+        }).join('');
+    }
+
+    if (totalEl) totalEl.textContent = '$' + fmt(getPosProductTotal());
+    list.querySelectorAll('.btn-remove-sale-product').forEach(btn => {
+        btn.onclick = () => {
+            posSelectedProducts = posSelectedProducts.filter(item => String(item.id) !== String(btn.dataset.id));
+            renderPosProducts();
+            syncSaleAmountFromFixedService();
+        };
+    });
+    syncSaleAmountFromFixedService();
+    refreshIcons();
+}
+
+function addProductToSale() {
+    const select = document.getElementById('pos-product-select');
+    const qtyInput = document.getElementById('pos-product-qty');
+    const productId = select?.value;
+    const qty = parseFloat(qtyInput?.value) || 1;
+    const product = db.products.find(p => String(p.id) === String(productId));
+    if (!product) return showToast('Seleccione un producto.', 'error');
+    if (qty <= 0) return showToast('Ingrese una cantidad valida.', 'error');
+
+    const existing = posSelectedProducts.find(item => String(item.id) === String(product.id));
+    if (existing) existing.qty = (parseFloat(existing.qty) || 0) + qty;
+    else posSelectedProducts.push({ id: product.id, name: product.name, price: getProductPrice(product), qty });
+
+    if (select) select.value = '';
+    if (qtyInput) qtyInput.value = '1';
+    syncCustomSelect('pos-product-select');
+    renderPosProducts();
+}
+
+function resetPosProducts() {
+    posSelectedProducts = [];
+    const qtyInput = document.getElementById('pos-product-qty');
+    if (qtyInput) qtyInput.value = '1';
+    renderPosProducts();
 }
 
 async function saveTransaction() {
@@ -1990,12 +2301,35 @@ async function saveTransaction() {
         transactionSchema.employee_id = selectedEmployee.id;
 
         const clientInput = document.getElementById('client-name').value.trim();
+        if (!currentClient && !clientInput) {
+            showToast('Ingrese o seleccione una clienta.', 'error');
+            document.getElementById('btn-save-transaction').disabled = false;
+            return;
+        }
         transactionSchema.client_name = currentClient ? currentClient.name : clientInput;
         transactionSchema.client_id = currentClient ? currentClient.id : null;
         const srvId = document.getElementById('service').value;
         const srv = db.services.find(s => s.id == srvId); // == for types
         transactionSchema.detail = srv ? srv.name : 'Servicio';
         transactionSchema.method = document.getElementById('payment-method').value;
+        const soldProducts = posSelectedProducts.map(item => ({
+            id: item.id,
+            name: item.name,
+            price: getProductPrice(item),
+            qty: parseFloat(item.qty) || 1,
+            total: getProductPrice(item) * (parseFloat(item.qty) || 1)
+        }));
+        const productTotal = soldProducts.reduce((sum, item) => sum + item.total, 0);
+        if (soldProducts.length > 0) {
+            transactionSchema.products = soldProducts;
+            transactionSchema.product_total = productTotal;
+            transactionSchema.detail += ` + Productos: ${soldProducts.map(p => `${p.name} x${p.qty}`).join(', ')}`;
+            
+            // Actualizar stock de cada producto
+            for (const p of soldProducts) {
+                await updateProductStock(p.id, -p.qty);
+            }
+        }
         
         if (!currentClient && clientInput) {
             currentClient = await createClient(clientInput);
@@ -2104,7 +2438,7 @@ async function saveTransaction() {
     if (userId) inserts.forEach(tx => { tx.user_id = userId; });
     let tData = null, error = null;
     try {
-        const result = await window.supabaseClient.from('transactions').insert(inserts).select();
+        const result = await insertRowsSafe('transactions', inserts);
         tData = result.data;
         error = result.error;
         // Si falla por columna inexistente, reintentar sin ella
@@ -2124,13 +2458,23 @@ async function saveTransaction() {
     }
     document.getElementById('btn-save-transaction').disabled = false;
 
+    if (error) {
+        showToast('Transacción guardada localmente.', 'warning');
+        tData = inserts.map(tx => ({ ...tx, id: createLocalId('tx'), pendingSync: true }));
+    } else if (!tData || tData.length === 0) {
+        tData = inserts.map(tx => ({ ...tx, id: createLocalId('tx') }));
+    }
+
     if (tData && tData.length > 0) {
-        tData.forEach(t => {
+        tData.forEach((t, index) => {
+            const originalTx = inserts[index] || {};
             db.transactions.push({
-                id: t.id, date: t.transaction_date, isIncome: t.is_income,
-                amount: parseFloat(t.amount), clientName: t.client_name,
+                id: t.id, date: t.transaction_date || originalTx.transaction_date, isIncome: t.is_income ?? originalTx.is_income,
+                amount: parseFloat(t.amount) || parseFloat(originalTx.amount), clientName: t.client_name || originalTx.client_name,
                 clientId: t.client_id, detail: t.detail, method: t.method, employee: t.employee,
-                employeeId: t.employee_id || transactionSchema.employee_id || null
+                employeeId: t.employee_id || transactionSchema.employee_id || null,
+                products: normalizeAppointmentServices(t.products || transactionSchema.products),
+                productTotal: parseFloat(t.product_total || transactionSchema.product_total) || 0
             });
         });
         persistCollectionLocal('transactions', db.transactions);
@@ -2141,7 +2485,7 @@ async function saveTransaction() {
             const emp = db.employees.find(e => String(e.id) === String(transactionSchema.employee_id) || e.name === transactionSchema.employee);
             if (emp) {
                 const newTips = (parseFloat(emp.tips) || 0) + tipAmt;
-                const { error: empErr } = await window.supabaseClient.from('employees').update({ tips: newTips }).eq('id', emp.id);
+                const { error: empErr } = await updateRowSafe('employees', emp.id, { tips: newTips });
                 if (!empErr) emp.tips = newTips;
                 persistCollectionLocal('employees', db.employees);
             }
@@ -2167,6 +2511,7 @@ async function saveTransaction() {
            document.getElementById('is-tip').checked = false;
            document.getElementById('tip-amount').value = '';
            document.getElementById('tip-fields').classList.add('hidden');
+           resetPosProducts();
            updateFormSelects();
         } else {
            document.getElementById('expense-amount').value = '';
@@ -2197,6 +2542,8 @@ async function saveTransaction() {
             method: tx.method,
             employee: tx.employee,
             employeeId: tx.employee_id || null,
+            products: normalizeAppointmentServices(tx.products),
+            productTotal: parseFloat(tx.product_total) || 0,
             pendingSync: true
         }));
         localRows.forEach(tx => db.transactions.push(tx));
@@ -2582,13 +2929,13 @@ async function saveCashClosure() {
 
     showToast('Guardando cierre...', 'info');
     try {
-        let { data, error } = await window.supabaseClient.from('closures').insert([closureData]).select();
+        let { data, error } = await insertRowsSafe('closures', closureData);
         if (error && error.message) {
             const m = error.message.match(/Could not find the '(\w+)' column/i);
             if (m && m[1] && m[1] in closureData) {
                 const cleanClosure = { ...closureData };
                 delete cleanClosure[m[1]];
-                const retry = await window.supabaseClient.from('closures').insert([cleanClosure]).select();
+                const retry = await insertRowsSafe('closures', cleanClosure);
                 data = retry.data;
                 error = retry.error;
             }
@@ -3178,7 +3525,7 @@ async function saveClient() {
             balance: 0,
             debt: 0
         });
-        if (error || !newClients || !newClients[0]) {
+        if (error) {
             console.error('Error creando clienta:', error);
             const fallbackClient = {
                 ...clientData,
@@ -3191,12 +3538,18 @@ async function saveClient() {
             persistCollectionLocal('clients', db.clients);
             showToast('Clienta guardada localmente. Revisar sincronización con Supabase.', 'warning');
         } else {
-            db.clients.push(newClients[0]);
+            const savedClient = newClients?.[0] || {
+                ...clientData,
+                id: createLocalId('client'),
+                balance: 0,
+                debt: 0
+            };
+            db.clients.push(savedClient);
             persistCollectionLocal('clients', db.clients);
 
             // Subir foto pendiente si se seleccionó durante la creación
-            if (window.pendingClientPhoto && newClients[0].id) {
-                await uploadClientPhoto(window.pendingClientPhoto, newClients[0].id);
+            if (window.pendingClientPhoto && savedClient.id && !String(savedClient.id).startsWith('local_')) {
+                await uploadClientPhoto(window.pendingClientPhoto, savedClient.id);
                 window.pendingClientPhoto = null;
             }
         }
@@ -3420,6 +3773,8 @@ function initSettings() {
 
         document.getElementById('modal-srv-close').addEventListener('click', closeServiceModal);
         document.getElementById('modal-emp-close').addEventListener('click', closeEmployeeModal);
+        const productClose = document.getElementById('modal-product-close');
+        if (productClose) productClose.addEventListener('click', closeProductModal);
 
         // Habilitar/deshabilitar precio según tipo seleccionado
         document.getElementById('srv-type').addEventListener('change', (e) => {
@@ -3428,6 +3783,8 @@ function initSettings() {
 
         document.getElementById('fm-service').addEventListener('submit', (e) => { e.preventDefault(); saveService(); });
         document.getElementById('fm-employee').addEventListener('submit', (e) => { e.preventDefault(); saveEmployee(); });
+        const productForm = document.getElementById('fm-product');
+        if (productForm) productForm.addEventListener('submit', (e) => { e.preventDefault(); saveProduct(); });
 
         // Cargar clave IA guardada
         const savedKey = localStorage.getItem('violet_ai_key');
@@ -3443,6 +3800,7 @@ function initSettings() {
 
     // Estos renders se ejecutan siempre para refrescar los datos
     renderServicesList();
+    renderProductsList();
     renderEmployeesList();
     updateFormSelects();
     if (typeof renderStaffPanel === 'function') renderStaffPanel();
@@ -3701,15 +4059,15 @@ async function saveService() {
     // Helper retry para columna faltante en services
     async function svcUpsert(payload, isUpdate) {
         let result = isUpdate
-            ? await window.supabaseClient.from('services').update(payload).eq('id', editingServiceId).select()
-            : await window.supabaseClient.from('services').insert([payload]).select();
+            ? await updateRowSafe('services', editingServiceId, payload)
+            : await insertRowsSafe('services', payload);
         if (result.error?.message) {
             const m = result.error.message.match(/Could not find the '(\w+)' column/i);
             if (m && m[1] && m[1] in payload) {
                 const clean = { ...payload }; delete clean[m[1]];
                 result = isUpdate
-                    ? await window.supabaseClient.from('services').update(clean).eq('id', editingServiceId).select()
-                    : await window.supabaseClient.from('services').insert([clean]).select();
+                    ? await updateRowSafe('services', editingServiceId, clean)
+                    : await insertRowsSafe('services', clean);
             }
         }
         return result;
@@ -3736,7 +4094,7 @@ async function saveService() {
         }
     } else {
         const { data, error } = await svcUpsert(serviceData, false);
-        if (error || !data || !data[0]) {
+        if (error) {
             console.error('[Service] Insert Error:', error);
             db.services.push({
                 id: createLocalId('srv'),
@@ -3749,7 +4107,8 @@ async function saveService() {
             persistCollectionLocal('services', db.services);
             showToast('Servicio guardado localmente. Revisar sincronización con Supabase.', 'warning');
         } else {
-            db.services.push({ id: data[0].id, name: data[0].name, priceType: data[0].price_type, price: parseFloat(data[0].price) || null, duration: data[0].duration ? parseInt(data[0].duration) : null });
+            const savedItem = data?.[0] || { id: createLocalId('srv'), name, price_type: type, price: serviceData.price, duration };
+            db.services.push({ id: savedItem.id, name: savedItem.name, priceType: savedItem.price_type, price: parseFloat(savedItem.price) || null, duration: savedItem.duration ? parseInt(savedItem.duration) : null });
             persistCollectionLocal('services', db.services);
             showToast('Servicio creado');
         }
@@ -3809,13 +4168,13 @@ async function saveEmployee() {
         // No enviar user_id en updates (es inmutable)
         const updatePayload = { ...empData };
         delete updatePayload.user_id;
-        let { error } = await window.supabaseClient.from('employees').update(updatePayload).eq('id', editingEmployeeId);
+        let { error } = await updateRowSafe('employees', editingEmployeeId, updatePayload);
         if (error && error.message) {
             const m = error.message.match(/Could not find the '(\w+)' column/i);
             if (m && m[1] && m[1] in updatePayload) {
                 delete updatePayload[m[1]];
                 console.warn(`[Employee] Columna '${m[1]}' no existe, reintentando.`);
-                const retry = await window.supabaseClient.from('employees').update(updatePayload).eq('id', editingEmployeeId);
+                const retry = await updateRowSafe('employees', editingEmployeeId, updatePayload);
                 error = retry.error;
             }
         }
@@ -3858,13 +4217,13 @@ async function saveEmployee() {
             showToast('Funcionaria actualizada');
         }
     } else {
-        let { data, error } = await window.supabaseClient.from('employees').insert([empData]).select();
+        let { data, error } = await insertRowsSafe('employees', empData);
         if (error && error.message) {
             const m = error.message.match(/Could not find the '(\w+)' column/i);
             if (m && m[1] && m[1] in empData) {
                 delete empData[m[1]];
                 console.warn(`[Employee] Columna '${m[1]}' no existe, reintentando.`);
-                const retry = await window.supabaseClient.from('employees').insert([empData]).select();
+                const retry = await insertRowsSafe('employees', empData);
                 data = retry.data;
                 error = retry.error;
             }
@@ -3914,6 +4273,158 @@ async function saveEmployee() {
     closeEmployeeModal();
 }
 
+function openProductModal(id = null) {
+    editingProductId = id;
+    const title = document.getElementById('product-modal-title');
+    if (title) title.textContent = id ? 'Editar Producto' : 'Nuevo Producto';
+
+    if (id) {
+        const product = db.products.find(x => String(x.id) === String(id));
+        if (product) {
+            document.getElementById('product-name').value = product.name || '';
+            document.getElementById('product-price').value = product.price || '';
+            document.getElementById('product-stock').value = product.stock ?? '';
+        }
+    } else {
+        document.getElementById('fm-product')?.reset();
+    }
+
+    document.getElementById('modal-product')?.classList.add('open');
+    refreshIcons();
+}
+
+function closeProductModal() {
+    document.getElementById('modal-product')?.classList.remove('open');
+    editingProductId = null;
+}
+
+async function saveProduct() {
+    const name = document.getElementById('product-name')?.value.trim();
+    const price = parseFloat(document.getElementById('product-price')?.value);
+    const stockRaw = document.getElementById('product-stock')?.value;
+    const stock = stockRaw === '' ? null : parseFloat(stockRaw);
+
+    if (!name) return showToast('Ingrese el nombre del producto.', 'error');
+    if (Number.isNaN(price) || price < 0) return showToast('Ingrese un precio valido.', 'error');
+    if (stockRaw !== '' && (Number.isNaN(stock) || stock < 0)) return showToast('Ingrese un stock valido.', 'error');
+
+    const payload = {
+        name,
+        price,
+        stock,
+        active: true
+    };
+
+    const submitBtn = document.querySelector('#fm-product [type="submit"]');
+    if (submitBtn) submitBtn.disabled = true;
+
+    try {
+        if (editingProductId) {
+            const { data, error } = await updateRowSafe('products', editingProductId, payload);
+            const local = db.products.find(x => String(x.id) === String(editingProductId));
+            const next = data?.[0] || { ...(local || {}), ...payload, id: editingProductId, pendingSync: Boolean(error) };
+            if (local) Object.assign(local, next);
+            else db.products.push(next);
+            persistCollectionLocal('products', db.products);
+            showToast(error ? 'Producto guardado localmente' : 'Producto actualizado', error ? 'warning' : 'success');
+        } else {
+            const { data, error } = await insertRowsSafe('products', payload);
+            const saved = data?.[0] || { id: createLocalId('prod'), ...payload, pendingSync: true };
+            db.products.push(saved);
+            persistCollectionLocal('products', db.products);
+            showToast(error ? 'Producto guardado localmente' : 'Producto creado', error ? 'warning' : 'success');
+        }
+    } catch (err) {
+        console.error('[Product] Save Error:', err);
+        const fallback = {
+            id: editingProductId || createLocalId('prod'),
+            ...payload,
+            pendingSync: true
+        };
+        upsertLocalCollectionItem('products', fallback);
+        showToast('Producto guardado localmente', 'warning');
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
+        renderProductsList();
+        updateFormSelects();
+        closeProductModal();
+    }
+}
+
+/**
+ * Actualiza el stock de un producto localmente y en Supabase.
+ * @param {string|number} productId 
+ * @param {number} qtyChange - Cantidad a sumar (positiva) o restar (negativa)
+ */
+async function updateProductStock(productId, qtyChange) {
+    const product = db.products.find(p => String(p.id) === String(productId));
+    if (!product) return;
+
+    // Si el stock es null, significa que no se controla stock para este producto
+    if (product.stock === null || product.stock === undefined) return;
+
+    const newStock = Math.max(0, (parseFloat(product.stock) || 0) + qtyChange);
+    product.stock = newStock;
+    
+    // Persistencia local
+    persistCollectionLocal('products', db.products);
+    renderProductsList();
+
+    // Persistencia remota
+    try {
+        const { error } = await updateRowSafe('products', productId, { stock: newStock });
+        if (error) {
+            console.warn(`[Stock] Error al actualizar stock remoto de ${product.name}:`, error);
+            product.pendingSync = true;
+            persistCollectionLocal('products', db.products);
+        }
+    } catch (e) {
+        console.error(`[Stock] Excepción al actualizar stock de ${product.name}:`, e);
+        product.pendingSync = true;
+        persistCollectionLocal('products', db.products);
+    }
+}
+
+function renderProductsList() {
+    const list = document.getElementById('settings-products-list');
+    if (!list) return;
+    list.innerHTML = '';
+    if (!db.products || db.products.length === 0) {
+        list.innerHTML = '<span style="color:var(--text-dim);font-size:0.85rem">No hay productos registrados.</span>';
+        return;
+    }
+
+    db.products.forEach(product => {
+        const li = document.createElement('li');
+        li.className = 'task-item';
+        const stockText = product.stock === null || product.stock === undefined || product.stock === ''
+            ? ''
+            : `<span style="color:var(--text-dim); font-size:0.78rem; margin-left:8px;">Stock: ${product.stock}</span>`;
+        li.innerHTML = `
+            <span class="task-text" style="flex:1;">${product.name} <span style="color:var(--violet-200); font-size:0.8rem; margin-left:8px;">$${fmt(getProductPrice(product))}</span>${stockText}</span>
+            <div style="display:flex; gap:5px;">
+                <button class="btn-icon btn-sm" onclick="openProductModal('${product.id}')" style="padding:0;color:var(--text-dim)"><i data-lucide="edit-2" style="width:14px;height:14px"></i></button>
+                <button class="btn-icon btn-sm btn-del-product" data-id="${product.id}" style="padding:0;color:var(--danger)"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
+            </div>
+        `;
+        list.appendChild(li);
+    });
+
+    list.querySelectorAll('.btn-del-product').forEach(btn => {
+        btn.onclick = async (e) => {
+            const id = e.currentTarget.getAttribute('data-id');
+            const { error } = await deleteRowSafe('products', id);
+            if (error) console.warn('[Product] Delete remote error:', error);
+            db.products = db.products.filter(x => String(x.id) !== String(id));
+            persistCollectionLocal('products', db.products);
+            renderProductsList();
+            updateFormSelects();
+            renderPosProducts();
+        };
+    });
+    refreshIcons();
+}
+
 function renderServicesList() {
     const list = document.getElementById('settings-services-list');
     list.innerHTML = '';
@@ -3937,9 +4448,10 @@ function renderServicesList() {
     document.querySelectorAll('.btn-del-srv').forEach(btn => {
         btn.onclick = async (e) => {
             const id = e.currentTarget.getAttribute('data-id');
-            const { error } = await window.supabaseClient.from('services').delete().eq('id', id);
-            if (error) { showToast('Error al eliminar servicio', 'error'); return; }
+            const { error } = await deleteRowSafe('services', id);
+            if (error && !String(id).startsWith('srv_')) { showToast('Error al eliminar servicio', 'error'); return; }
             db.services = db.services.filter(x => x.id != id);
+            persistCollectionLocal('services', db.services);
             updateFormSelects();
             renderServicesList();
         };
@@ -3987,7 +4499,7 @@ function renderEmployeesList() {
     document.querySelectorAll('.btn-del-emp').forEach(btn => {
         btn.onclick = async (e) => {
             const id = e.currentTarget.getAttribute('data-id');
-            const { error } = await window.supabaseClient.from('employees').delete().eq('id', id);
+            const { error } = await deleteRowSafe('employees', id);
             if (error) console.warn('[Employee] Delete remote error:', error);
             db.employees = db.employees.filter(x => x.id != id);
             persistCollectionLocal('employees', db.employees);

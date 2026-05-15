@@ -116,6 +116,13 @@ body::before {
 .weekly-hours-grid { display: grid; gap: .7rem; margin-top: .7rem; }
 .weekly-hours-row { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: .7rem; align-items: center; padding: .7rem; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: rgba(0,0,0,.14); }
 .weekly-day { display: flex; align-items: center; gap: .45rem; color: var(--text-secondary); font-size: .86rem; }
+.apt-selected-services { display: flex; flex-direction: column; gap: .45rem; margin-top: .65rem; }
+.apt-service-chip { display: flex; align-items: center; justify-content: space-between; gap: .6rem; padding: .55rem .7rem; background: rgba(201,168,76,.08); border: 1px solid rgba(201,168,76,.22); border-radius: var(--radius-sm); color: var(--text-primary); font-size: .84rem; }
+.sale-products-controls { display: grid; grid-template-columns: minmax(0, 1fr) 110px auto; gap: .6rem; align-items: center; }
+.sale-products-list { display: flex; flex-direction: column; gap: .45rem; margin-top: .8rem; }
+.sale-product-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: .6rem; align-items: center; padding: .55rem .7rem; background: rgba(0,0,0,.16); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); font-size: .84rem; }
+.sale-products-total { margin-top: .65rem; text-align: right; color: var(--text-secondary); font-size: .82rem; }
+.sale-products-total strong { color: var(--gold-400); }
 
 /* List styles for widgets */
 .widget-list-item { display: flex; align-items: center; justify-content: space-between; padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); background: var(--bg-input); }
@@ -465,6 +472,7 @@ tbody tr:hover { background: var(--bg-hover); }
 
     /* Formulario caja en mobile */
     #split-payment-section { grid-template-columns: 1fr !important; }
+    .sale-products-controls { grid-template-columns: 1fr !important; }
     .seña-method-row-wrap { flex-direction: column; }
 
     /* Forzar 1 columna en TODOS los form-grid (incluye los con estilo inline) */
