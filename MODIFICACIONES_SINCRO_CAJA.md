@@ -3,33 +3,74 @@
 **Autor:** Antigravity (AI Coding Assistant)
 
 ## 1. Problemas Identificados
-*   **Tabla de Movimientos Vacía:** La tabla `#today-transactions-tbody` no se actualizaba tras la carga asíncrona de Supabase. Al entrar a la sección "Caja" por primera vez, el estado local (`db.transactions`) solía estar vacío, y no había un disparador que re-renderizara la tabla al finalizar el `sync`.
-*   **Fallo en "Cobrar" desde Agenda:** Al navegar desde la Agenda a la Caja, los servicios y el monto no se poblaban. Esto se debía a una coincidencia de nombres demasiado estricta (case-sensitive) y a la falta de un mecanismo de respaldo (fallback) cuando un servicio del turno no existía exactamente igual en la base de datos de servicios del POS.
 
-## 2. Modificaciones Realizadas
+### A. Tabla de Movimientos Vacía
+La tabla `#today-transactions-tbody` no se actualizaba tras la carga asíncrona de Supabase. Al entrar a la sección "Caja" por primera vez, `db.transactions` estaba vacío y no había un disparador que re-renderizara la tabla al finalizar la sincronización.
 
-### A. Sincronización Automática (pos.js)
-Se modificó la función `loadDataFromSupabase` para detectar si el usuario se encuentra actualmente en la vista de "Caja".
-- **Cambio:** Al finalizar el bucle de tablas, si `currentView === 'caja'`, se ejecutan automáticamente `updateStats()` y `renderTransactionsTable()`.
-- **Resultado:** Los datos aparecen en pantalla apenas termina la sincronización, sin necesidad de navegar fuera y volver a entrar.
+### B. Fallo en "Cobrar" desde Agenda (PROBLEMA PRINCIPAL)
+Al presionar el botón de cobrar (🛒) en la Agenda del Dashboard, la cita tiene un campo `services` que almacena un **nombre compuesto** como:
+```
+"Corte Dama Precisión + Esmaltado + Depi Patilla"
+```
+El sistema trataba esta cadena entera como **un solo servicio** y lo buscaba textualmente en `db.services`. Como no existe un servicio con ese nombre exacto, la búsqueda fallaba y el monto quedaba en **$0**.
 
-### B. Robustez en el Renderizado de Tabla (pos.js)
-Se mejoró `renderTransactionsTable` para evitar errores silenciosos y mejorar la observabilidad.
-- **Cambio:** Se añadió un bloque `try-catch` más granular y logs detallados (`[CAJA]`) que indican cuántas transacciones fueron filtradas para el día de hoy.
-- **Cambio:** Mejora en el agrupamiento de transacciones por fecha para manejar valores nulos o formatos inconsistentes.
+#### Evidencia del Console Log:
+```
+[COBRAR] Servicio 1 NO encontrado en base de datos: "Corte Dama Precisión + Esmaltado + Depi Patilla". Usando precio de cita: 0
+[COBRAR] Monto total cargado: 0
+```
 
-### C. Refuerzo del Flujo "Cobrar" (chargeAppointment en pos.js)
-Se rediseñó la lógica de transferencia de datos Agenda → Caja.
-- **Normalización:** Los nombres de servicios se comparan ahora usando `.trim().toLowerCase()`.
-- **Fallback de Precios:** Si un servicio de la cita no se encuentra en `db.services`, el sistema ahora intenta usar el precio guardado directamente en el objeto de la cita (`srvRef.price`). Esto garantiza que el `totalAmount` se calcule correctamente incluso con servicios personalizados o nombres cambiados.
-- **Logs de Diagnóstico:** Se añadieron logs con prefijo `[COBRAR]` para trazar qué servicios se encontraron, cuáles no, y qué monto total se está inyectando en el formulario.
+## 2. Causa Raíz Técnica
 
-## 3. Estado del Deployment
-*   **Repositorio:** Se realizó un `git push origin main` con el commit `a0231de`.
-*   **Vercel:** Debería haber reconocido el cambio automáticamente. Si el error persiste, se recomienda verificar en el Dashboard de Vercel si el build fue exitoso o si hay errores de compilación.
+La función `normalizeAppointmentServices()` (línea ~95 de pos.js) parsea `apt.services`:
+- Si es un array de objetos como `[{name: "Corte Dama Precisión + Esmaltado + Depi Patilla"}]`, devuelve el array **sin dividir** los nombres compuestos.
+- Si es un JSON string que se parsea exitosamente a dicho array, igual lo devuelve sin dividir.
+- Solo divide por `+` cuando JSON.parse **falla** (en el `catch`).
 
-## 4. Próximos Pasos Sugeridos
-Si el error persiste después de limpiar caché (Ctrl+Shift+R):
-1.  **Revisar Consola (F12):** Buscar logs `[COBRAR]`. Ver qué imprime "Servicios detectados en cita".
-2.  **Verificar Mapeo de Datos:** Asegurarse de que `getAppointmentServices(apt)` esté devolviendo los objetos con la estructura esperada (`name`, `price`, etc.).
-3.  **Confirmar `db.services`:** Si la lista de servicios en la base de datos está vacía al momento de cobrar, el dropdown no podrá seleccionar el servicio principal, aunque el monto se cargue correctamente.
+Luego `chargeAppointment()` itera estos objetos e intenta hacer match con `db.services`, pero busca el nombre completo como una sola cadena.
+
+## 3. Solución Implementada
+
+### Fix 1: Expansión de servicios compuestos (commit `255ab92`)
+En `chargeAppointment()` (pos.js ~línea 6125), se añadió un paso de **expansión** antes de la búsqueda en DB:
+
+```javascript
+// Expandir servicios compuestos: "Corte + Esmaltado + Depi" → 3 servicios individuales
+const expandedServices = [];
+services.forEach(srvRef => {
+    const rawName = String(srvRef.name || '').trim();
+    if (rawName.includes('+')) {
+        rawName.split(/\s*\+\s*/).filter(Boolean).forEach(subName => {
+            expandedServices.push({ ...srvRef, name: subName.trim() });
+        });
+    } else {
+        expandedServices.push(srvRef);
+    }
+});
+```
+
+Ahora `"Corte Dama Precisión + Esmaltado + Depi Patilla"` se divide en:
+1. `"Corte Dama Precisión"` → busca en db.services → encuentra → suma precio
+2. `"Esmaltado"` → busca en db.services → encuentra → suma precio
+3. `"Depi Patilla"` → busca en db.services → encuentra → suma precio
+
+### Fix 2: Auto-refresh después de Sync (commit `a0231de`)
+En `loadDataFromSupabase()`, al finalizar la carga, si `currentView === 'caja'`, se ejecutan automáticamente `updateStats()` y `renderTransactionsTable()`.
+
+### Fix 3: Fallback de precios (commit `a0231de`)
+Si un servicio individual tampoco se encuentra en la DB, se intenta usar `srvRef.price` como respaldo.
+
+## 4. Archivos Modificados
+- `pos.js` — función `chargeAppointment()` (~línea 6074)
+- `pos.js` — función `loadDataFromSupabase()` (~línea 463)
+- `pos.js` — función `renderTransactionsTable()` (~línea 2881)
+
+## 5. Diagnóstico Futuro
+Buscar en la consola (F12) los prefijos:
+- `[COBRAR]` — traza el flujo completo de cobro
+- `[CAJA]` — muestra cuántas transacciones se filtran por día
+- `[SYNC]` — muestra la sincronización con Supabase
+
+## 6. Recomendaciones Pendientes
+- **`normalizeAppointmentServices()`**: Considerar aplicar la misma lógica de split por `+` directamente en esta función para que TODOS los consumidores (dashboard, agenda, etc.) tengan servicios individuales desde el inicio.
+- **Tabla `products`**: El console muestra un error 404 para `public.products` — la tabla no existe en Supabase. Verificar si es necesaria o si debe crearse.
