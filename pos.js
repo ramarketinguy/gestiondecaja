@@ -2752,20 +2752,19 @@ async function saveTransaction() {
     if (userId) inserts.forEach(tx => { tx.user_id = userId; });
     let tData = null, error = null;
     try {
-        const result = await insertRowsSafe('transactions', inserts);
+        // Limpiar columnas que sabemos que no existen en Supabase para evitar el error 400 en consola.
+        // Se guardarán localmente a partir del array 'inserts' original.
+        const cleanInserts = inserts.map(tx => {
+            const clean = { ...tx };
+            delete clean.products;
+            delete clean.product_total;
+            delete clean.employee_id;
+            return clean;
+        });
+
+        const result = await insertRowsSafe('transactions', cleanInserts);
         tData = result.data;
         error = result.error;
-        // Si falla por columna inexistente, reintentar sin ella
-        if (error && error.message) {
-            const m = error.message.match(/Could not find the '(\w+)' column/i);
-            if (m && m[1]) {
-                console.warn(`[Caja] Columna '${m[1]}' no existe, reintentando sin ella.`);
-                inserts.forEach(tx => { delete tx[m[1]]; });
-                const retry = await window.supabaseClient.from('transactions').insert(inserts).select();
-                tData = retry.data;
-                error = retry.error;
-            }
-        }
     } catch (e) {
         console.error('[Caja] Excepción al insertar:', e);
         error = { message: e.message };
