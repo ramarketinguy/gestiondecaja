@@ -222,20 +222,20 @@ function renderDashboardAgendaResumen() {
             ? (getAppointmentServices(apt).map(s => s.name).join(' + ') || apt.service || 'Visita')
             : (apt.service || 'Visita');
         
-        const emp = db.employees.find(e => String(e.id) === String(getAppointmentEmployeeId(apt)));
-        const empColor = emp && emp.color ? emp.color : 'var(--gold-400)';
+        const empId = typeof getAppointmentEmployeeId === 'function' ? getAppointmentEmployeeId(apt) : (apt.employeeId || apt.employee_id);
+        const empColor = typeof getSafeEmployeeColor === 'function' ? getSafeEmployeeColor(empId) : '#7b52b5';
 
         list.innerHTML += `
-            <div class="widget-list-item" style="border-left:3px solid ${empColor}; display:flex; justify-content:space-between; align-items:center;">
-                <div style="display:flex; align-items:center; flex:1;">
-                    <div style="font-weight:700;color:${empColor};min-width:70px;">${aptTime(apt)}</div>
+            <div class="widget-list-item" style="border-left:4px solid ${empColor}; display:flex; justify-content:space-between; align-items:center; background:rgba(29, 18, 44, 0.3); margin-bottom:8px; border-radius:8px; padding:10px 15px; border:1px solid rgba(155,114,212,0.1); border-left:4px solid ${empColor};">
+                <div style="display:flex; align-items:center; flex:1; gap:12px;">
+                    <div style="font-weight:700; color:var(--text-primary); font-size:0.9rem; min-width:60px;">${aptTime(apt)}</div>
                     <div class="info" style="flex:1;">
-                        <span class="main-text">${apt.clientName || apt.client_name || 'Sin cliente'}</span>
-                        <span class="sub-text">${serviceLabel}</span>
+                        <span class="main-text" style="font-weight:600; color:var(--text-primary); font-size:0.88rem;">${apt.clientName || apt.client_name || 'Sin cliente'}</span>
+                        <span class="sub-text" style="display:block; font-size:0.75rem; color:var(--text-dim); margin-top:2px;">${serviceLabel}</span>
                     </div>
                 </div>
-                <button class="btn-cobrar-chip" onclick="chargeAppointment('${apt.id}')" title="Cobrar">
-                    <i data-lucide="shopping-cart"></i>
+                <button class="btn-cobrar-chip" onclick="chargeAppointment('${apt.id}')" title="Cobrar" style="background:var(--success-bg); color:var(--success); border:1px solid rgba(74,222,128,0.2); height:fit-content;">
+                    <i data-lucide="shopping-cart" style="width:14px; height:14px;"></i>
                 </button>
             </div>
         `;

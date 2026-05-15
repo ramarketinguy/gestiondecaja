@@ -67,6 +67,13 @@ function getAppointmentEmployeeId(apt) {
     return apt?.employeeId || apt?.employee_id || null;
 }
 
+function getSafeEmployeeColor(empId) {
+    const emp = db.employees.find(e => String(e.id) === String(empId));
+    if (emp && emp.color) return emp.color;
+    // Si no hay empleada o no tiene color, usamos un color neutro de la marca (Violet 400)
+    return '#7b52b5'; 
+}
+
 function normalizeTimeValue(value) {
     return (value || '').toString().slice(0, 5);
 }
@@ -1577,22 +1584,24 @@ function renderAgendaSidePanel(dateStr) {
         html += `<div style="color:var(--text-dim);font-size:.8rem;">Sin citas programadas.</div>`;
     } else {
         html += apts.map(a => {
-            const emp = db.employees.find(e => String(e.id) === String(getAppointmentEmployeeId(a)));
-            const empColor = emp && emp.color ? emp.color : 'var(--violet-400)';
-            return `<div class="apt-chip" data-apt-id="${a.id}" style="padding:6px 10px;background:rgba(91,58,138,0.15);border-left:3px solid ${empColor};border-radius:4px;margin-bottom:4px;font-size:.82rem;cursor:pointer;transition:background .15s;">
+            const empId = getAppointmentEmployeeId(a);
+            const empColor = getSafeEmployeeColor(empId);
+            const emp = db.employees.find(e => String(e.id) === String(empId));
+            
+            return `<div class="apt-chip" data-apt-id="${a.id}" style="padding:10px 12px; background:rgba(29, 18, 44, 0.4); border-left:4px solid ${empColor}; border-radius:8px; margin-bottom:8px; font-size:.85rem; cursor:pointer; transition:all 0.2s; border:1px solid rgba(155,114,212,0.1); border-left:4px solid ${empColor};">
                 <div style="display:flex;justify-content:space-between;align-items:center;">
                     <div>
-                        <strong>${getAppointmentTime(a) || '--:--'}</strong> · ${a.clientName || a.client_name || 'Sin cliente'}<br>
-                        <span style="color:var(--text-dim);font-size:.72rem;">${a.service || 'Servicio s/e'}</span>
+                        <strong style="color:var(--text-primary);">${getAppointmentTime(a) || '--:--'}</strong> · <span style="color:var(--text-primary);">${a.clientName || a.client_name || 'Sin cliente'}</span><br>
+                        <span style="color:var(--text-dim);font-size:.75rem;">${a.service || 'Servicio s/e'} ${emp ? '· ' + emp.name : ''}</span>
                     </div>
-                        <div style="display:flex;gap:6px;align-items:center;">
-                            <button class="btn-cobrar-chip" onclick="chargeAppointment('${a.id}')" title="Cobrar"><i data-lucide="shopping-cart"></i> Cobrar</button>
-                            <button class="btn-icon apt-edit-btn" data-apt-id="${a.id}" title="Editar"><i data-lucide="pencil" style="width:14px;height:14px;color:var(--violet-300);"></i></button>
-                            <button class="btn-icon apt-del-btn" data-apt-id="${a.id}" title="Eliminar"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--danger);"></i></button>
-                        </div>
+                    <div style="display:flex;gap:6px;align-items:center;">
+                        <button class="btn-cobrar-chip" onclick="chargeAppointment('${a.id}')" title="Cobrar"><i data-lucide="shopping-cart"></i> Cobrar</button>
+                        <button class="btn-icon apt-edit-btn" data-apt-id="${a.id}" title="Editar"><i data-lucide="pencil" style="width:14px;height:14px;color:var(--violet-300);"></i></button>
+                        <button class="btn-icon apt-del-btn" data-apt-id="${a.id}" title="Eliminar"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--danger);"></i></button>
                     </div>
-                </div>`;
-            }).join('');
+                </div>
+            </div>`;
+        }).join('');
     }
 
     // Horarios disponibles (slots libres) — clickeable para agendar rápido
@@ -1757,28 +1766,42 @@ function renderAgenda(dateStr) {
         timeline.innerHTML = `<div class="empty-state"><i data-lucide="coffee"></i><p>Sin citas para este día.</p></div>`;
     } else {
         dayApts.forEach(apt => {
-            const emp = db.employees.find(e => String(e.id) === String(getAppointmentEmployeeId(apt)));
-            const empColor = emp && emp.color ? emp.color : 'var(--accent)';
+            const empId = getAppointmentEmployeeId(apt);
+            const empColor = getSafeEmployeeColor(empId);
+            const emp = db.employees.find(e => String(e.id) === String(empId));
             const duration = getAppointmentDuration(apt);
 
             const eventEl = document.createElement('div');
             eventEl.className = 'agenda-event';
-            eventEl.style.cssText = `background-color:${empColor};border-left:4px solid rgba(0,0,0,0.2);padding:10px 14px;border-radius:8px;margin-bottom:8px;cursor:pointer;transition:transform .15s,box-shadow .15s; position:relative;`;
+            // Usamos fondo oscuro/semi-transparente y solo el borde de color para que sea profesional y no chillón
+            eventEl.style.cssText = `background:rgba(29, 18, 44, 0.6); border:1px solid rgba(155,114,212,0.15); border-left:5px solid ${empColor}; padding:12px 15px; border-radius:10px; margin-bottom:10px; cursor:pointer; transition:all .2s; position:relative; box-shadow:0 4px 15px rgba(0,0,0,0.2);`;
+            
             eventEl.innerHTML = `
                 <div style="display:flex; justify-content:space-between; align-items:flex-start;">
                     <div>
-                        <div class="event-time" style="font-weight:700;font-size:0.9rem;">${getAppointmentTime(apt) || '--:--'}</div>
-                        <div class="event-title" style="font-size:0.85rem;margin-top:2px;">${apt.client_name || apt.clientName || 'Sin cliente'}</div>
-                        <div class="event-desc" style="font-size:0.75rem;color:rgba(255,255,255,0.7);margin-top:2px;">${apt.service || 'Servicio'} ${emp ? '· ' + emp.name : ''} · ${duration}min</div>
+                        <div class="event-time" style="font-weight:700; font-size:0.95rem; color:var(--text-primary); display:flex; align-items:center; gap:8px;">
+                            ${getAppointmentTime(apt) || '--:--'}
+                            <span style="width:8px; height:8px; border-radius:50%; background:${empColor}; display:inline-block;"></span>
+                        </div>
+                        <div class="event-title" style="font-size:0.9rem; font-weight:600; margin-top:4px; color:var(--text-primary);">${apt.client_name || apt.clientName || 'Sin cliente'}</div>
+                        <div class="event-desc" style="font-size:0.78rem; color:var(--text-dim); margin-top:4px;">${apt.service || 'Servicio'} ${emp ? '· ' + emp.name : ''} · ${duration}min</div>
                     </div>
-                    <button class="btn-cobrar-chip" onclick="event.stopPropagation(); chargeAppointment('${apt.id}')" title="Cobrar" style="background:rgba(255,255,255,0.2); border:1px solid rgba(255,255,255,0.3);">
-                        <i data-lucide="shopping-cart"></i>
+                    <button class="btn-cobrar-chip" onclick="event.stopPropagation(); chargeAppointment('${apt.id}')" title="Cobrar" style="background:var(--success-bg); color:var(--success); border:1px solid rgba(74,222,128,0.2); padding:6px 12px;">
+                        <i data-lucide="shopping-cart" style="width:14px; height:14px;"></i> Cobrar
                     </button>
                 </div>
             `;
             eventEl.onclick = () => openAppointmentDetail(apt);
-            eventEl.onmouseenter = () => { eventEl.style.transform = 'scale(1.02)'; eventEl.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)'; };
-            eventEl.onmouseleave = () => { eventEl.style.transform = ''; eventEl.style.boxShadow = ''; };
+            eventEl.onmouseenter = () => { 
+                eventEl.style.transform = 'translateY(-2px)'; 
+                eventEl.style.background = 'rgba(40, 25, 60, 0.8)';
+                eventEl.style.boxShadow = '0 6px 20px rgba(0,0,0,0.4)'; 
+            };
+            eventEl.onmouseleave = () => { 
+                eventEl.style.transform = ''; 
+                eventEl.style.background = 'rgba(29, 18, 44, 0.6)';
+                eventEl.style.boxShadow = '0 4px 15px rgba(0,0,0,0.2)'; 
+            };
             timeline.appendChild(eventEl);
         });
     }
@@ -6047,7 +6070,7 @@ function chargeAppointment(id) {
     if (!apt) return;
 
     // 1. Navegar a POS (Caja)
-    if (typeof window.navigateTo === 'function') window.navigateTo('pos');
+    if (typeof window.navigateTo === 'function') window.navigateTo('caja');
 
     // 2. Llenar cliente
     const clientInput = document.getElementById('client-name');
