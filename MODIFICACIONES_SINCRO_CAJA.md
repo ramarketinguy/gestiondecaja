@@ -74,3 +74,29 @@ Buscar en la consola (F12) los prefijos:
 ## 6. Recomendaciones Pendientes
 - **`normalizeAppointmentServices()`**: Considerar aplicar la misma lógica de split por `+` directamente en esta función para que TODOS los consumidores (dashboard, agenda, etc.) tengan servicios individuales desde el inicio.
 - **Tabla `products`**: El console muestra un error 404 para `public.products` — la tabla no existe en Supabase. Verificar si es necesaria o si debe crearse.
+
+## 7. Estabilización del Dashboard (Actualización 16 Mayo, 2026)
+
+### A. Sincronización de Agenda (Filtro por Fecha)
+Se detectó que el Dashboard no mostraba citas debido a un desfase entre la zona horaria de Supabase (UTC) y la local. 
+- **Solución:** Se implementó una normalización agresiva en `renderDashboardAgendaResumen` que convierte cualquier formato (ISO, String o Date) a un `YYYY-MM-DD` local antes de comparar con el "hoy" del navegador.
+- **Log:** `[DASHBOARD] Coincidencia hallada: [Nombre] [Fecha]`.
+
+### B. Tareas: UI Optimista y Anti-Bloqueo
+Las tareas se cargaban lentamente o bloqueaban el input en caso de red inestable.
+- **Solución:** Implementación de "Guardado Optimista". La tarea aparece en la lista localmente al presionar Enter, y se sincroniza en segundo plano. 
+- **Resiliencia:** Se añadió un `safetyTimeout` de 10 segundos que desbloquea el input automáticamente si la red falla, evitando que la usuaria se quede trabada.
+
+### C. Seguridad: Ocultamiento de Tokens
+El gestor de estado (`state.js`) imprimía el `access_token` de Supabase en la consola por cada cambio de estado.
+- **Solución:** Se filtró la función `setState` para detectar rutas sensibles (`session`, `token`). Ahora los logs muestran `[STATE] auth.session = [HIDDEN/SENSITIVE]`.
+
+### D. Mecanismo de Fuerza Bruta para Caché
+Para asegurar que los cambios de código lleguen al usuario final en Vercel:
+- **Solución:** Se implementó un versionamiento manual en los scripts de `pos.html` (`?v=202605160001`). Al incrementar este número, el navegador descarga obligatoriamente la última versión del JS.
+
+## 8. Resumen de Archivos Clave
+- `state.js`: Corazón del estado. Controla la seguridad de los logs y la persistencia local.
+- `pos.js`: Motor de sincronización y lógica de cobro.
+- `pos.dashboard.js`: Controlador de widgets y visualización diaria.
+- `pos.html`: Punto de entrada que gestiona el orden de carga y versiones.
