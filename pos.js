@@ -175,6 +175,83 @@ function getProductPrice(product) {
     return parseFloat(product?.price) || 0;
 }
 
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+    }[char]));
+}
+
+function getCatalogSearchItems() {
+    const services = (db.services || []).map(service => {
+        const fixedPrice = service.priceType === 'fijo' || service.price_type === 'fijo';
+        const price = parseFloat(service.price);
+        const duration = parseInt(service.duration, 10);
+        return {
+            type: 'Servicio',
+            name: service.name || 'Servicio sin nombre',
+            priceLabel: fixedPrice && !Number.isNaN(price) ? `$${fmt(price)}` : 'Variable',
+            meta: duration ? `${duration} min` : 'Sin duracion',
+            search: `${service.name || ''} servicio`
+        };
+    });
+
+    const products = (db.products || []).map(product => {
+        const price = getProductPrice(product);
+        const hasStock = product.stock !== null && product.stock !== undefined && product.stock !== '';
+        return {
+            type: 'Producto',
+            name: product.name || 'Producto sin nombre',
+            priceLabel: `$${fmt(price)}`,
+            meta: hasStock ? `Stock: ${product.stock}` : 'Sin control de stock',
+            search: `${product.name || ''} producto`
+        };
+    });
+
+    return [...services, ...products].sort((a, b) => a.name.localeCompare(b.name, 'es'));
+}
+
+function renderSidebarPriceSearch(query = '') {
+    const results = document.getElementById('sidebar-price-search-results');
+    if (!results) return;
+
+    const q = String(query || '').trim().toLowerCase();
+    if (q.length < 1) {
+        results.innerHTML = '<span class="sidebar-price-empty">Escribi para buscar.</span>';
+        return;
+    }
+
+    const matches = getCatalogSearchItems()
+        .filter(item => item.search.toLowerCase().includes(q))
+        .slice(0, 8);
+
+    if (matches.length === 0) {
+        results.innerHTML = '<span class="sidebar-price-empty">Sin resultados.</span>';
+        return;
+    }
+
+    results.innerHTML = matches.map(item => `
+        <div class="sidebar-price-item">
+            <div>
+                <div class="sidebar-price-name">${escapeHtml(item.name)}</div>
+                <div class="sidebar-price-meta">${escapeHtml(item.type)} · ${escapeHtml(item.meta)}</div>
+            </div>
+            <div class="sidebar-price-value">${escapeHtml(item.priceLabel)}</div>
+        </div>
+    `).join('');
+}
+
+function initSidebarPriceSearch() {
+    const input = document.getElementById('sidebar-price-search-input');
+    if (!input || input.dataset.bound === 'true') return;
+    input.dataset.bound = 'true';
+    input.addEventListener('input', () => renderSidebarPriceSearch(input.value));
+    renderSidebarPriceSearch(input.value);
+}
+
 function isMissingRemoteTableError(error) {
     const text = [
         error?.code,
@@ -286,6 +363,7 @@ function violetInit() {
         if (typeof initCRM === 'function') initCRM();
         if (typeof initAnalytics === 'function') initAnalytics();
         if (typeof initSettings === 'function') initSettings();
+        if (typeof initSidebarPriceSearch === 'function') initSidebarPriceSearch();
         if (typeof renderStaffPanel === 'function') renderStaffPanel();
         if (typeof initStaffModals === 'function') initStaffModals();
         if (typeof initAIChat === 'function') initAIChat();
@@ -521,6 +599,9 @@ async function loadDataFromSupabase() {
         if (typeof renderProductsList === 'function') renderProductsList();
         if (typeof renderEmployeesList === 'function') renderEmployeesList();
         if (typeof updateFormSelects === 'function') updateFormSelects();
+        if (typeof renderSidebarPriceSearch === 'function') {
+            renderSidebarPriceSearch(document.getElementById('sidebar-price-search-input')?.value || '');
+        }
         if (typeof renderStaffPanel === 'function') renderStaffPanel();
         if (typeof initAgendaHandlers === 'function') initAgendaHandlers();
         if (typeof initDashboard === 'function') initDashboard();
@@ -1331,6 +1412,108 @@ function addMinutesToTime(time, minutes) {
     return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
 }
 
+function timeToMinutes(time) {
+    const [h, m] = String(time || '').slice(0, 5).split(':').map(Number);
+    return [h, m].some(Number.isNaN) ? null : h * 60 + m;
+}
+
+function minutesToTime(totalMinutes) {
+    return `${String(Math.floor(totalMinutes / 60)).padStart(2, '0')}:${String(totalMinutes % 60).padStart(2, '0')}`;
+}
+
+function getSlotAvailability({ minute, appointments, blocks, activeEmployees }) {
+    const employees = Array.isArray(activeEmployees) ? activeEmployees : [];
+    const maxConcurrent = employees.length > 0 ? employees.length : 1;
+    const busyEmpIds = [];
+    let totalBusyCount = 0;
+
+    const isGlobalBlock = (blocks || []).some(block => {
+        const blockStart = timeToMinutes(block.start || block.startTime || block.start_time);
+        const blockEnd = timeToMinutes(block.end || block.endTime || block.end_time);
+        if (blockStart === null || blockEnd === null) return false;
+        const inBlock = minute >= blockStart && minute < blockEnd;
+        return inBlock && !(block.employeeId || block.employee_id);
+    });
+    if (isGlobalBlock) {
+        return { available: false, busyEmpIds, availableEmployees: [], totalBusyCount, effectiveCapacity: 0 };
+    }
+
+    const blockedEmpIds = new Set();
+    (blocks || []).forEach(block => {
+        const blockStart = timeToMinutes(block.start || block.startTime || block.start_time);
+        const blockEnd = timeToMinutes(block.end || block.endTime || block.end_time);
+        if (blockStart === null || blockEnd === null) return;
+        if (minute >= blockStart && minute < blockEnd) {
+            const empId = block.employeeId || block.employee_id;
+            if (empId) blockedEmpIds.add(String(empId));
+        }
+    });
+
+    (appointments || []).forEach(appointment => {
+        const start = timeToMinutes(getAppointmentTime(appointment));
+        if (start === null) return;
+        const end = start + getAppointmentDuration(appointment);
+        if (minute >= start && minute < end) {
+            totalBusyCount++;
+            const empId = getAppointmentEmployeeId(appointment);
+            if (empId) busyEmpIds.push(String(empId));
+        }
+    });
+
+    const effectiveCapacity = Math.max(0, maxConcurrent - blockedEmpIds.size);
+    const unavailableIds = new Set([...busyEmpIds, ...blockedEmpIds]);
+    const availableEmployees = employees.filter(emp => !unavailableIds.has(String(emp.id)));
+
+    return {
+        available: totalBusyCount < effectiveCapacity,
+        busyEmpIds,
+        availableEmployees,
+        totalBusyCount,
+        effectiveCapacity
+    };
+}
+
+function appointmentOverlapsBlockedSlot(dateStr, startMinutes, endMinutes, employeeId) {
+    const cfg = getBusinessConfig();
+    return (cfg.blockedSlots || []).some(block => {
+        if (block.date !== dateStr) return false;
+        const blockStart = timeToMinutes(block.start || block.startTime || block.start_time);
+        const blockEnd = timeToMinutes(block.end || block.endTime || block.end_time);
+        if (blockStart === null || blockEnd === null) return false;
+        const blockEmployeeId = block.employeeId || block.employee_id || null;
+        const appliesToAppointment = !blockEmployeeId || !employeeId || String(blockEmployeeId) === String(employeeId);
+        return appliesToAppointment && startMinutes < blockEnd && endMinutes > blockStart;
+    });
+}
+
+function shouldSaveAppointmentLocally(error) {
+    if (!window.supabaseClient) return true;
+    const text = String(error?.message || error?.name || '').toLowerCase();
+    return text.includes('failed to fetch') || text.includes('network') || text.includes('timeout');
+}
+
+function buildLocalAppointmentRow(row, forcedId = null) {
+    return {
+        ...row,
+        id: forcedId || createLocalId('apt'),
+        date: row.apt_date,
+        time: row.apt_time,
+        clientId: row.client_id,
+        clientName: row.client_name,
+        employeeId: row.employee_id,
+        services: row.services,
+        duration: row.duration,
+        endTime: row.end_time,
+        pendingSync: true
+    };
+}
+
+function showAppointmentSaveError(error) {
+    console.error('[Cita] Error al guardar en Supabase:', error);
+    const msg = error?.message || 'Error desconocido';
+    showToast('No se guardo la cita: ' + msg, 'error');
+}
+
 async function saveAppointment() {
     const nameInput = document.getElementById('apt-client-name').value.trim();
     const dateInput = document.getElementById('apt-date').value;
@@ -1373,20 +1556,24 @@ async function saveAppointment() {
         endTime = addMinutesToTime(timeInput, duration);
     }
 
-    // Collision Detection Logic. Se permite mismo horario exacto para varias clientas.
+    // Collision Detection Logic: una misma empleada no puede solapar turnos.
     const start = new Date(`${dateInput}T${timeInput}`);
     const end = new Date(start.getTime() + duration * 60000);
+    const startMinutes = timeToMinutes(timeInput);
+    const endMinutes = startMinutes === null ? null : startMinutes + duration;
 
     const hasCollision = db.appointments.some(a => {
         if (editingAppointmentId && String(a.id) === String(editingAppointmentId)) return false;
         if (!aptEmployeeId) return false;
         if (String(getAppointmentEmployeeId(a) || '') !== String(aptEmployeeId || '') || getAppointmentDate(a) !== dateInput) return false;
-        if (getAppointmentTime(a) === timeInput) return false;
         const aStart = new Date(`${getAppointmentDate(a)}T${getAppointmentTime(a)}`);
         const aDuration = getAppointmentDuration(a);
         const aEnd = new Date(aStart.getTime() + aDuration * 60000);
         return (start < aEnd && end > aStart);
     });
+    const hasBlockedSlot = startMinutes !== null && endMinutes !== null
+        ? appointmentOverlapsBlockedSlot(dateInput, startMinutes, endMinutes, aptEmployeeId)
+        : false;
 
     // Crear clienta si no existe
     if (!aptCurrentClient) {
@@ -1399,6 +1586,7 @@ async function saveAppointment() {
     const dayHours = getBusinessHoursForDate(dateInput);
     const isClosed = dayHours.closed;
     const collisionMsg = hasCollision ? "Ya hay un turno agendado en ese horario con la misma funcionaria." : "";
+    const blockedMsg = hasBlockedSlot ? "El turno se superpone con un bloque horario no disponible." : "";
     const closedMsg = isClosed ? "El salón está configurado como CERRADO para este día." : "";
 
     const aptData = withCurrentUser({
@@ -1415,12 +1603,13 @@ async function saveAppointment() {
     });
     const repeatDates = getAppointmentRepeatDates(dateInput);
 
-    if (hasCollision || isClosed) {
+    if (hasCollision || isClosed || hasBlockedSlot) {
         const warningModal = document.getElementById('modal-appointment-warning');
         const warningText = document.getElementById('apt-warning-msg');
         const confirmBtn = document.getElementById('btn-confirm-apt-force');
         if (warningModal && warningText && confirmBtn) {
-            warningText.innerHTML = `<strong>Atención:</strong><br>${closedMsg}${closedMsg && collisionMsg ? '<br>' : ''}${collisionMsg}<br><br>¿Deseas agendar de todas formas?`;
+            const warningMessages = [closedMsg, collisionMsg, blockedMsg].filter(Boolean).join('<br>');
+            warningText.innerHTML = `<strong>Atención:</strong><br>${warningMessages}<br><br>¿Deseas agendar de todas formas?`;
             warningModal.classList.add('open');
             confirmBtn.onclick = async () => {
                 warningModal.classList.remove('open');
@@ -1443,50 +1632,22 @@ async function executeSaveAppointment(aptData, repeatDates, dateInput, duration,
             delete updateData.user_id;
             res = await updateRowSafe('appointments', editingAppointmentId, updateData);
             if (res.error || !res.data?.[0]) {
-                // Fallback local si falla Supabase o no hay cliente
-                res = {
-                    data: [{
-                        ...updateData,
-                        id: editingAppointmentId,
-                        date: updateData.apt_date,
-                        time: updateData.apt_time,
-                        clientId: updateData.client_id,
-                        clientName: updateData.client_name,
-                        employeeId: updateData.employee_id,
-                        services: updateData.services,
-                        duration: updateData.duration,
-                        endTime: updateData.end_time,
-                        pendingSync: !window.supabaseClient
-                    }],
-                    error: res.error || null
-                };
+                if (!shouldSaveAppointmentLocally(res.error)) return showAppointmentSaveError(res.error);
+                res = { data: [buildLocalAppointmentRow(updateData, editingAppointmentId)], error: null };
             }
         } else {
             const savedRows = [];
-            let firstError = null;
             for (const repeatDate of repeatDates) {
                 const row = { ...aptData, apt_date: repeatDate };
                 const insertRes = await insertAppointmentSafe(row);
                 if (insertRes.error) {
-                    firstError = insertRes.error;
-                    savedRows.push({
-                        ...row,
-                        id: createLocalId('apt'),
-                        date: row.apt_date,
-                        time: row.apt_time,
-                        clientId: row.client_id,
-                        clientName: row.client_name,
-                        employeeId: row.employee_id,
-                        services: row.services,
-                        duration: row.duration,
-                        endTime: row.end_time,
-                        pendingSync: true
-                    });
+                    if (!shouldSaveAppointmentLocally(insertRes.error)) return showAppointmentSaveError(insertRes.error);
+                    savedRows.push(buildLocalAppointmentRow(row));
                 } else {
                     savedRows.push(insertRes.data?.[0]);
                 }
             }
-            res = { data: savedRows, error: firstError && savedRows.length === 0 ? firstError : null };
+            res = { data: savedRows, error: null };
         }
     } catch (e) {
         console.error('[Cita] Excepción:', e);
@@ -1674,60 +1835,36 @@ function renderAgendaSidePanel(dateStr) {
     // Horarios disponibles (slots libres) — clickeable para agendar rápido
     if (!isClosed && dayHours.openTime && dayHours.closeTime) {
         const slots = [];
-        const toMin = t => { const [h, mn] = t.split(':').map(n => parseInt(n)); return h*60 + mn; };
-        const toStr = mm => `${String(Math.floor(mm/60)).padStart(2,'0')}:${String(mm%60).padStart(2,'0')}`;
-        const start = toMin(dayHours.openTime);
-        const end = toMin(dayHours.closeTime);
+        const start = timeToMinutes(dayHours.openTime);
+        const end = timeToMinutes(dayHours.closeTime);
         const blocks = (cfg.blockedSlots || []).filter(b => b.date === dateStr);
         // Reserva temporal en curso
         const tempRes = (window.tempSlotReservation && window.tempSlotReservation.date === dateStr) ? window.tempSlotReservation.time : null;
         const isPastDate = dateStr < todayStr;
         
         const activeEmps = db.employees || [];
-        const maxConcurrent = activeEmps.length > 0 ? activeEmps.length : 1;
-
         for (let t = start; t < end; t += 30) {
-            const inBlock = blocks.some(b => t >= toMin(b.start) && t < toMin(b.end));
-            const ts = toStr(t);
+            const ts = minutesToTime(t);
             const tempTaken = tempRes === ts;
+            const availability = getSlotAvailability({ minute: t, appointments: apts, blocks, activeEmployees: activeEmps });
 
             // Calcular ocupación considerando duraciones
-            let totalBusyCount = 0;
-            const busyEmpIds = [];
-            apts.forEach(a => {
-                if (!getAppointmentTime(a)) return;
-                const sTime = toMin(getAppointmentTime(a));
-                const duration = getAppointmentDuration(a);
-                const eTime = sTime + duration;
-                
-                if (t >= sTime && t < eTime) {
-                    totalBusyCount++;
-                    const busyEmpId = getAppointmentEmployeeId(a);
-                    if (busyEmpId) busyEmpIds.push(busyEmpId);
-                }
-            });
-
-            if (!inBlock && !tempTaken && !isPastDate) {
-                if (totalBusyCount < maxConcurrent) {
+            if (availability.available && !tempTaken && !isPastDate) {
                     let bgColor = 'rgba(52,211,153,0.12)';
                     let borderColor = 'rgba(52,211,153,0.3)';
                     let textColor = 'var(--success)';
 
                     // Si hay alguien ocupado pero aún hay lugar, teñir con el color de un disponible
-                    if (totalBusyCount > 0 && activeEmps.length > 0) {
-                        const availableEmps = activeEmps.filter(e => !busyEmpIds.includes(e.id));
-                        if (availableEmps.length > 0) {
-                            const availEmp = availableEmps[0];
+                    if (availability.totalBusyCount > 0 && availability.availableEmployees.length > 0) {
+                            const availEmp = availability.availableEmployees[0];
                             if (availEmp && availEmp.color) {
                                 textColor = availEmp.color;
                                 bgColor = availEmp.color + '20'; // ~12% opacity
                                 borderColor = availEmp.color + '50'; // ~31% opacity
                             }
-                        }
                     }
 
                     slots.push({ time: ts, bgColor, borderColor, textColor });
-                }
             }
         }
         html += `<h5 style="font-size:.8rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;margin:1.2rem 0 .6rem;font-weight:700;">Horarios disponibles <span style="color:var(--success);font-weight:600;">(${slots.length})</span></h5>`;
@@ -1935,42 +2072,25 @@ function renderAgendaDaySidePanel(dateStr) {
     // Horarios disponibles
     if (!isClosed && dayHours.openTime && dayHours.closeTime) {
         const slots = [];
-        const toMin = t => { const [h, mn] = t.split(':').map(n => parseInt(n)); return h*60 + mn; };
-        const toStr = mm => `${String(Math.floor(mm/60)).padStart(2,'0')}:${String(mm%60).padStart(2,'0')}`;
-        const start = toMin(dayHours.openTime);
-        const end = toMin(dayHours.closeTime);
+        const start = timeToMinutes(dayHours.openTime);
+        const end = timeToMinutes(dayHours.closeTime);
         const blocks = (cfg.blockedSlots || []).filter(b => b.date === dateStr);
         const tempRes = (window.tempSlotReservation && window.tempSlotReservation.date === dateStr) ? window.tempSlotReservation.time : null;
         const isPastDate = dateStr < todayStr;
         const activeEmps = db.employees || [];
-        const maxConcurrent = activeEmps.length > 0 ? activeEmps.length : 1;
 
         for (let t = start; t < end; t += 30) {
-            const inBlock = blocks.some(b => t >= toMin(b.start) && t < toMin(b.end));
-            const ts = toStr(t);
+            const ts = minutesToTime(t);
             const tempTaken = tempRes === ts;
-            let totalBusyCount = 0;
-            const busyEmpIds = [];
-            apts.forEach(a => {
-                if (!getAppointmentTime(a)) return;
-                const sTime = toMin(getAppointmentTime(a));
-                const srv = db.services.find(s => s.name === a.service);
-                const duration = srv && srv.duration ? parseInt(srv.duration) : 30;
-                const eTime = sTime + duration;
-                if (t >= sTime && t < eTime) {
-                    totalBusyCount++;
-                    const busyEmpId = getAppointmentEmployeeId(a);
-                    if (busyEmpId) busyEmpIds.push(busyEmpId);
-                }
-            });
-            if (!inBlock && !tempTaken && !isPastDate && totalBusyCount < maxConcurrent) {
+            const availability = getSlotAvailability({ minute: t, appointments: apts, blocks, activeEmployees: activeEmps });
+            if (availability.available && !tempTaken && !isPastDate) {
                 let bgColor = 'rgba(52,211,153,0.12)', borderColor = 'rgba(52,211,153,0.3)', textColor = 'var(--success)';
-                if (totalBusyCount > 0 && activeEmps.length > 0) {
-                    const availableEmps = activeEmps.filter(e => !busyEmpIds.includes(e.id));
-                    if (availableEmps.length > 0 && availableEmps[0].color) {
-                        textColor = availableEmps[0].color;
-                        bgColor = availableEmps[0].color + '20';
-                        borderColor = availableEmps[0].color + '50';
+                if (availability.totalBusyCount > 0 && availability.availableEmployees.length > 0) {
+                    const availEmp = availability.availableEmployees[0];
+                    if (availEmp.color) {
+                        textColor = availEmp.color;
+                        bgColor = availEmp.color + '20';
+                        borderColor = availEmp.color + '50';
                     }
                 }
                 slots.push({ time: ts, bgColor, borderColor, textColor });
@@ -2340,6 +2460,7 @@ function updateFormSelects() {
         if (prevEmp) aptEmpSelect.value = prevEmp;
     }
 
+    renderSidebarPriceSearch(document.getElementById('sidebar-price-search-input')?.value || '');
     initCustomSelects(); // Refrescar todos los custom selects
 }
 

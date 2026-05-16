@@ -20,7 +20,7 @@
     <!-- Supabase -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     
-    <link rel="stylesheet" href="pos.css?v=202605151230">
+    <link rel="stylesheet" href="pos.css?v=202605160002">
 </head>
 <body>
 
@@ -59,6 +59,16 @@
                 <i data-lucide="settings"></i>
                 <span>Configuración</span>
             </a>
+            <div class="sidebar-price-search" id="sidebar-price-search">
+                <label for="sidebar-price-search-input">Buscador de precios</label>
+                <div class="sidebar-search-input">
+                    <i data-lucide="search"></i>
+                    <input type="search" id="sidebar-price-search-input" placeholder="Servicio o producto...">
+                </div>
+                <div class="sidebar-price-results" id="sidebar-price-search-results">
+                    <span class="sidebar-price-empty">Escribí para buscar.</span>
+                </div>
+            </div>
         </nav>
 
         <div class="sidebar-footer">
@@ -1618,7 +1628,7 @@
     <script src="auth.js?v=202604260900"></script>
     <script src="supabase-helpers.js?v=202605151230"></script>
     <script src="clients.js?v=202604260900"></script>
-    <script src="pos.js?v=202605160001"></script>
+    <script src="pos.js?v=202605160002"></script>
     <script src="pos.dashboard.js?v=202605160001"></script>
     <script src="pos.services.js?v=202604260900"></script>
     <script src="pos.config.js?v=202605140600"></script>
