@@ -68,8 +68,13 @@ function setState(path, value) {
     const lastKey = keys[keys.length - 1];
     obj[lastKey] = value;
 
-    // Debug
-    console.log(`[STATE] ${path} = `, value);
+    // Debug (Ocultar tokens sensibles)
+    const isSensitive = path.includes('session') || path.toLowerCase().includes('token');
+    if (isSensitive) {
+        console.log(`[STATE] ${path} = [HIDDEN/SENSITIVE]`);
+    } else {
+        console.log(`[STATE] ${path} = `, value);
+    }
 }
 
 /**

@@ -5,10 +5,14 @@
 
 function initDashboard() {
     console.log('[DASHBOARD] init');
-    renderDashboardCumpleanos();
-    renderDashboardTareas();
-    renderDashboardDeudas();
-    renderDashboardAgendaResumen();
+    try {
+        renderDashboardCumpleanos();
+        renderDashboardTareas();
+        renderDashboardDeudas();
+        renderDashboardAgendaResumen();
+    } catch (e) {
+        console.error('[DASHBOARD] Fallo crítico durante inicialización:', e);
+    }
     if (typeof refreshIcons === 'function') refreshIcons();
 }
 
@@ -83,23 +87,53 @@ function renderDashboardTareas() {
             e.preventDefault();
             const text = input.value.trim();
             if (!text) return;
+
+            // Bloquear input para evitar doble envío
+            input.disabled = true;
+            input.placeholder = 'Guardando...';
+
+            // Timeout de seguridad: si en 10 seg no vuelve la red, desbloquear
+            const safetyTimeout = setTimeout(() => {
+                if (input.disabled) {
+                    input.disabled = false;
+                    input.placeholder = 'Reintentando...';
+                    console.warn('[DASHBOARD] Timeout de seguridad al guardar tarea');
+                }
+            }, 10000);
+
             const payload = { text, completed: false };
             const userId = typeof getUserId === 'function' ? getUserId() : null;
             if (userId) payload.user_id = userId;
-            let saved = null;
+
+            // Guardado optimista local
+            const tempId = createLocalId('task');
+            const tempTask = { id: tempId, ...payload, pendingSync: true };
+            db.tasks.push(tempTask);
+            persistCollectionLocal('tasks', db.tasks);
+            
+            input.value = '';
+            renderDashboardTareas();
+
             try {
                 const { data, error } = await insertRowsSafe('tasks', payload);
                 if (error) throw error;
-                saved = data?.[0] || null;
+                
+                // Reemplazar la temporal por la real si se guardó
+                if (data && data[0]) {
+                    const idx = db.tasks.findIndex(t => t.id === tempId);
+                    if (idx !== -1) db.tasks[idx] = data[0];
+                    persistCollectionLocal('tasks', db.tasks);
+                }
+                if (typeof showToast === 'function') showToast('Tarea guardada');
             } catch (err) {
-                console.error('[DASHBOARD] Error creando tarea:', err);
+                console.error('[DASHBOARD] Error sincronizando tarea:', err);
+                if (typeof showToast === 'function') showToast('Tarea guardada localmente', 'warning');
+            } finally {
+                clearTimeout(safetyTimeout);
+                input.disabled = false;
+                input.placeholder = 'Nueva tarea...';
+                renderDashboardTareas();
             }
-            const task = saved || { id: createLocalId('task'), ...payload, pendingSync: true };
-            db.tasks.push(task);
-            persistCollectionLocal('tasks', db.tasks);
-            input.value = '';
-            renderDashboardTareas();
-            if (typeof showToast === 'function') showToast(saved ? 'Tarea cargada' : 'Tarea guardada localmente', saved ? 'success' : 'warning');
         });
     }
 
@@ -206,11 +240,38 @@ function renderDashboardAgendaResumen() {
     if (!list) return;
     list.innerHTML = '';
 
-    const today = new Date().toISOString().split('T')[0];
+    const now = new Date();
+    const todayStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+    
+    console.log('[DASHBOARD] Hoy local:', todayStr);
+
     const appointments = db?.appointments || [];
+    console.log('[DASHBOARD] Total citas en DB:', appointments.length);
+    if (appointments.length > 0) {
+        console.log('[DASHBOARD] Muestra cita 0:', appointments[0].client_name || appointments[0].clientName, 'Fecha:', appointments[0].date || appointments[0].apt_date);
+    }
+
     const aptDate = (a) => typeof getAppointmentDate === 'function' ? getAppointmentDate(a) : (a.date || a.apt_date || '');
     const aptTime = (a) => typeof getAppointmentTime === 'function' ? getAppointmentTime(a) : ((a.time || a.apt_time || '').slice(0, 5));
-    const todaysApts = appointments.filter(a => aptDate(a) === today).sort((a, b) => aptTime(a).localeCompare(aptTime(b)));
+    
+    const todaysApts = appointments.filter(a => {
+        let d = aptDate(a);
+        if (!d) return false;
+        
+        // Normalización agresiva de fecha
+        let dStr = '';
+        if (typeof d === 'string') {
+            dStr = d.includes('T') ? d.split('T')[0] : d;
+        } else if (d instanceof Date) {
+            dStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        }
+
+        const match = dStr === todayStr;
+        if (match) console.log('[DASHBOARD] Coincidencia hallada:', a.clientName || a.client_name, dStr);
+        return match;
+    }).sort((a, b) => aptTime(a).localeCompare(aptTime(b)));
+
+    console.log('[DASHBOARD] Citas encontradas hoy:', todaysApts.length);
 
     if (todaysApts.length === 0) {
         list.innerHTML = '<span style="color:var(--text-dim);font-size:0.85rem">Sin citas para hoy</span>';

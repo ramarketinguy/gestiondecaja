@@ -451,9 +451,16 @@ async function loadDataFromSupabase() {
     }
 
     if (successCount > 0) {
+        console.log('[SYNC] Sincronización finalizada. Llamando a inicializadores...');
         // Limpiar duplicados de empleadas que puedan haber quedado por bugs previos
         try { if (typeof dedupeEmployees === 'function') await dedupeEmployees({ silent: true }); } catch (_) {}
-        if (typeof initDashboard === 'function') initDashboard();
+        
+        if (typeof initDashboard === 'function') {
+            console.log('[SYNC] Inicializando Dashboard...');
+            initDashboard();
+        } else {
+            console.warn('[SYNC] initDashboard no encontrada! Verifique que pos.dashboard.js cargó correctamente.');
+        }
         if (typeof renderServicesList === 'function') renderServicesList();
         if (typeof renderProductsList === 'function') renderProductsList();
         if (typeof renderEmployeesList === 'function') renderEmployeesList();
@@ -2787,257 +2794,266 @@ async function saveTransaction() {
     if (tData && tData.length > 0) {
         tData.forEach((t, index) => {
             const originalTx = inserts[index] || {};
+            const txDate = t.transaction_date || originalTx.transaction_date || new Date().toISOString();
+            const txAmount = parseFloat(t.amount || originalTx.amount) || 0;
+            const txIsIncome = t.is_income ?? originalTx.is_income ?? true;
+            
             db.transactions.push({
-                id: t.id, date: t.transaction_date || originalTx.transaction_date, isIncome: t.is_income ?? originalTx.is_income,
-                amount: parseFloat(t.amount) || parseFloat(originalTx.amount), clientName: t.client_name || originalTx.client_name,
-                clientId: t.client_id, detail: t.detail, method: t.method, employee: t.employee,
-                employeeId: t.employee_id || transactionSchema.employee_id || null,
-                products: normalizeAppointmentServices(t.products || transactionSchema.products),
-                productTotal: parseFloat(t.product_total || transactionSchema.product_total) || 0
+                id: t.id, 
+                date: txDate, 
+                isIncome: txIsIncome,
+                amount: txAmount, 
+                clientName: t.client_name || originalTx.client_name || 'Consumidor Final',
+                clientId: t.client_id || originalTx.client_id || null, 
+                detail: t.detail || originalTx.detail || '', 
+                method: t.method || originalTx.method || 'efectivo', 
+                employee: t.employee || originalTx.employee || '',
+                employeeId: t.employee_id || originalTx.employee_id || null,
+                products: normalizeAppointmentServices(t.products || originalTx.products),
+                productTotal: parseFloat(t.product_total || originalTx.product_total) || 0
             });
         });
         persistCollectionLocal('transactions', db.transactions);
 
-        // Manejar propina en la empleada si se guardó
-        if (tipTx) {
-            const tipAmt = tipTx.amount;
-            const emp = db.employees.find(e => String(e.id) === String(transactionSchema.employee_id) || e.name === transactionSchema.employee);
-            if (emp) {
-                const newTips = (parseFloat(emp.tips) || 0) + tipAmt;
-                const { error: empErr } = await updateRowSafe('employees', emp.id, { tips: newTips });
-                if (!empErr) emp.tips = newTips;
-                persistCollectionLocal('employees', db.employees);
-            }
-        }
-
+        // IDs para limpieza posterior
         const savedAppointmentId = window._chargeAppointmentId;
+        const savedClientId = isIncome ? (transactionSchema?.client_id || null) : null;
 
-        if (isIncome) {
-           const savedClientId = transactionSchema.client_id;
-           clearClientSelection();
-           // Si la ficha de esta clienta estaba abierta, actualizar el historial inmediatamente
-           if (activeModal && activeModal == savedClientId) {
-               renderClientHistory(activeModal);
-           }
-           document.getElementById('amount').value = '';
-           document.getElementById('full-service-price').value = '';
-           document.getElementById('service').value = '';
-           document.getElementById('is-partial-payment').checked = false;
-           document.getElementById('full-price-container').classList.add('hidden');
-           document.getElementById('is-split-payment').checked = false;
-           document.getElementById('split-payment-section').classList.add('hidden');
-           document.getElementById('split-amount').value = '';
-           document.getElementById('seña-method-row').classList.add('hidden');
-           document.getElementById('split-toggle-row').classList.remove('hidden');
-           document.getElementById('is-tip').checked = false;
-           document.getElementById('tip-amount').value = '';
-           document.getElementById('tip-fields').classList.add('hidden');
-           resetPosProducts();
-           // Limpiar panel de desglose de servicios si estaba visible
-           const bp = document.getElementById('pos-services-breakdown');
-           if (bp) bp.classList.add('hidden');
-           window._chargeDetail = null;
-           window._chargeBaseAmount = null;
-           window._chargeAppointmentId = null;
-           updateFormSelects();
-        } else {
-           document.getElementById('expense-amount').value = '';
-           document.getElementById('expense-detail').value = '';
-        }
-        
-        // Log de pago en ficha de clienta — registrar CADA transacción con clienta
-        tData.forEach(txRow => {
-            if (txRow.client_id) {
-                const fmt2 = n => Number(n).toLocaleString('es-UY');
-                const type = txRow.is_income ? 'Ingreso' : 'Egreso';
-                addClientLog(txRow.client_id, `💳 ${type} $${fmt2(txRow.amount)} — ${txRow.detail || ''} (${txRow.method})`);
+        // --- Limpieza de UI y Estado ---
+        try {
+            if (isIncome) {
+                clearClientSelection();
+                if (window.activeModal && window.activeModal == savedClientId) {
+                    renderClientHistory(window.activeModal);
+                }
+                // Limpiar inputs
+                ['amount', 'full-service-price', 'service', 'split-amount', 'tip-amount'].forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) el.value = '';
+                });
+                
+                // Ocultar secciones
+                ['full-price-container', 'split-payment-section', 'seña-method-row', 'tip-fields', 'pos-services-breakdown'].forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) el.classList.add('hidden');
+                });
+
+                document.getElementById('is-partial-payment').checked = false;
+                document.getElementById('is-split-payment').checked = false;
+                document.getElementById('is-tip').checked = false;
+                document.getElementById('split-toggle-row').classList.remove('hidden');
+                
+                resetPosProducts();
+                window._chargeDetail = null;
+                window._chargeBaseAmount = null;
+                window._chargeAppointmentId = null;
+                updateFormSelects();
+            } else {
+                document.getElementById('expense-amount').value = '';
+                document.getElementById('expense-detail').value = '';
             }
-        });
-        updateStats();
-        renderTransactionsTable();
-        showToast('Movimiento registrado en caja.');
-        
-        // Si el cobro proviene de una cita, eliminarla de la agenda
+        } catch (e) { console.error('[CAJA] Error en limpieza:', e); }
+
+        // --- Logging de Clienta ---
+        try {
+            tData.forEach(txRow => {
+                if (txRow.client_id) {
+                    const amtFmt = Number(txRow.amount || 0).toLocaleString('es-UY');
+                    const type = txRow.is_income ? 'Ingreso' : 'Egreso';
+                    addClientLog(txRow.client_id, `💳 ${type} $${amtFmt} — ${txRow.detail || ''} (${txRow.method || 'Efectivo'})`);
+                }
+            });
+        } catch (e) { console.error('[CAJA] Error addClientLog:', e); }
+
+        // --- Actualización de UI (CRÍTICO) ---
+        try {
+            updateStats();
+            renderTransactionsTable();
+            showToast('Movimiento registrado en caja.');
+        } catch (e) { console.error('[CAJA] Error actualizando UI:', e); }
+
+        // --- Eliminación de Cita ---
         if (savedAppointmentId) {
             try {
-                // Intentar borrar remotamente, sin bloquear la UI
+                db.appointments = db.appointments.filter(a => String(a.id) !== String(savedAppointmentId));
+                persistCollectionLocal('appointments', db.appointments);
+                
                 if (typeof deleteRowSafe === 'function') {
-                    deleteRowSafe('appointments', savedAppointmentId).catch(err => console.error('[Caja] Error al borrar cita cobrada remotamente:', err));
+                    deleteRowSafe('appointments', savedAppointmentId).catch(err => {
+                        console.warn('[CAJA] Borrado remoto falló (offline?):', err);
+                    });
                 }
                 
-                // Borrar localmente
-                db.appointments = db.appointments.filter(a => String(a.id) !== String(savedAppointmentId));
-                if (typeof persistCollectionLocal === 'function') persistCollectionLocal('appointments', db.appointments);
-                
-                // Refrescar interfaces
                 if (typeof renderDashboardAgendaResumen === 'function') renderDashboardAgendaResumen();
                 if (typeof renderAgenda === 'function') renderAgenda();
-            } catch (err) {
-                console.error('[Caja] Error al procesar cita cobrada:', err);
-            }
+            } catch (e) { console.error('[CAJA] Error borrando cita:', e); }
         }
-
-    } else {
-        console.error(error);
-        const localRows = inserts.map(tx => ({
-            id: createLocalId('tx'),
-            date: tx.transaction_date,
-            isIncome: tx.is_income,
-            amount: parseFloat(tx.amount),
-            clientName: tx.client_name,
-            clientId: tx.client_id,
-            detail: tx.detail,
-            method: tx.method,
-            employee: tx.employee,
-            employeeId: tx.employee_id || null,
-            products: normalizeAppointmentServices(tx.products),
-            productTotal: parseFloat(tx.product_total) || 0,
-            pendingSync: true
-        }));
-        localRows.forEach(tx => db.transactions.push(tx));
-        persistCollectionLocal('transactions', db.transactions);
-        updateStats();
-        renderTransactionsTable();
-        showToast('Movimiento guardado localmente. Revisá Supabase para sincronización.', 'warning');
     }
 }
 
 function updateStats() {
-    const today = new Date().toLocaleDateString();
-    let cache = { ef:0, tr:0, de:0, tot:0 };
+    console.log('[CAJA] Actualizando estadísticas...');
+    let cache = { ef: 0, tr: 0, de: 0 };
+    const today = new Date();
 
-    db.transactions.filter(t => isSameDay(t.date, new Date()) && !isTipTransaction(t)).forEach(t => {
-        if (t.isIncome) {
-            if (t.method === 'efectivo') cache.ef += t.amount;
-            else if (t.method === 'transferencia') cache.tr += t.amount;
-            else if (t.method === 'seña') cache.de += t.amount;
-            else if (t.method?.startsWith('tarjeta')) cache.tr += t.amount;
-        } else {
-            cache.ef -= t.amount;
+    if (!Array.isArray(db.transactions)) {
+        console.warn('[CAJA] db.transactions no es un array');
+        return;
+    }
+
+    db.transactions.forEach(t => {
+        try {
+            if (!t || !t.date) return;
+            if (!isSameDay(t.date, today)) return;
+            if (isTipTransaction(t)) return;
+
+            const amt = parseFloat(t.amount) || 0;
+            const method = (t.method || 'efectivo').toLowerCase();
+
+            if (t.isIncome) {
+                if (method === 'efectivo') cache.ef += amt;
+                else if (method === 'transferencia' || method === 'débito' || method === 'crédito' || method.startsWith('tarjeta')) cache.tr += amt;
+                else if (method === 'seña') cache.de += amt;
+            } else {
+                cache.ef -= amt;
+            }
+        } catch (e) {
+            console.error('[CAJA] Error procesando transacción para stats:', e, t);
         }
     });
 
-    const fmt = n => n.toLocaleString('es-UY', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
-    document.getElementById('stat-cash').textContent = `$${fmt(cache.ef)}`;
-    document.getElementById('stat-transfers').textContent = `$${fmt(cache.tr)}`;
-    document.getElementById('stat-deps').textContent = `$${fmt(cache.de)}`;
-    document.getElementById('stat-total').textContent = `$${fmt(cache.ef + cache.tr)}`;
+    const safeFmt = n => {
+        try {
+            return Number(n || 0).toLocaleString('es-UY', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+        } catch (e) { return '0'; }
+    };
+
+    const elCash = document.getElementById('stat-cash');
+    const elTr = document.getElementById('stat-transfers');
+    const elDe = document.getElementById('stat-deps');
+    const elTot = document.getElementById('stat-total');
+
+    if (elCash) elCash.textContent = `$${safeFmt(cache.ef)}`;
+    if (elTr) elTr.textContent = `$${safeFmt(cache.tr)}`;
+    if (elDe) elDe.textContent = `$${safeFmt(cache.de)}`;
+    if (elTot) elTot.textContent = `$${safeFmt(cache.ef + cache.tr)}`;
 }
 
 function renderTransactionsTable() {
     const tbody = document.getElementById('today-transactions-tbody');
-    tbody.innerHTML = '';
+    if (!tbody) return;
+
     const today = new Date();
-    // No filtramos por extras para permitir agrupación de 'Mixto'
-    // Log para depuración
     console.log(`[CAJA] Renderizando tabla. Total transacciones en DB: ${db.transactions.length}`);
 
     const todays = db.transactions.filter(t => {
         try {
-            if (!t.date) return false;
+            if (!t || !t.date) return false;
             return isSameDay(t.date, today);
         } catch(e) { return false; }
-    }).reverse();
+    }).sort((a, b) => new Date(b.date) - new Date(a.date));
 
-    console.log(`[CAJA] Transacciones de hoy encontradas: ${todays.length}`);
-    if (todays.length > 0) {
-        console.log('[CAJA] Primera transacción de hoy:', todays[0]);
-    }
+    console.log(`[CAJA] Transacciones de hoy filtradas: ${todays.length}`);
 
     if (todays.length === 0) {
         tbody.innerHTML = `<tr><td colspan="6" class="empty-state" style="padding: 2rem;"><p>Caja limpia por ahora.</p></td></tr>`;
         return;
     }
 
-    const fmt = n => Number(n).toLocaleString('es-UY', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
-    let totalIncome = 0, totalEgreso = 0;
+    const safeFmt = n => {
+        try {
+            return Number(n || 0).toLocaleString('es-UY', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+        } catch (e) { return '0'; }
+    };
+
+    // Agrupar por cliente y minuto para mostrar pagos mixtos juntos
+    const grouped = todays.reduce((acc, tx) => {
+        const dateKey = tx.date ? String(tx.date).slice(0, 16) : 'no-date';
+        const groupKey = tx.clientId ? `c_${tx.clientId}_${dateKey}` : `n_${tx.clientName}_${dateKey}`;
+        
+        if (!acc[groupKey]) acc[groupKey] = [];
+        acc[groupKey].push(tx);
+        return acc;
+    }, {});
 
     let html = '';
-    const grouped = {};
-    todays.forEach(t => {
-        const groupKey = t.date ? String(t.date) : 'no-date';
-        if (!grouped[groupKey]) grouped[groupKey] = [];
-        grouped[groupKey].push(t);
-    });
-
     Object.values(grouped).forEach(group => {
         try {
-            if (group.length === 1) {
-                const t = group[0];
-                const tipAmount = txIsTip(t) ? (t.amount || 0) : 0;
-                const rowAmount = txIsTip(t) ? 0 : (t.amount || 0);
-                const time = t.date ? new Date(t.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '--:--';
-                const bCl = t.isIncome
-                    ? (t.method==='efectivo' ? 'badge-efectivo'
-                       : t.method==='seña' ? 'badge-seña'
-                       : t.method?.startsWith('tarjeta') ? 'badge-tarjeta'
-                       : 'badge-transferencia')
-                    : 'badge-danger';
-                
-                const cleanDetail = String(t.detail || 'Servicio').split(' (')[0].split(' — ')[0];
-                const methodLabel = t.method === 'tarjeta_debito' ? 'T.Débito'
-                    : t.method === 'tarjeta_credito' ? 'T.Crédito' : t.method;
+            const t = group.find(tx => !isTipTransaction(tx)) || group[0];
+            const isIncome = t.isIncome;
+            const timeStr = t.date ? new Date(t.date).toLocaleTimeString('es-UY', { hour: '2-digit', minute: '2-digit' }) : '--:--';
+            
+            const totalGroupAmount = group.reduce((sum, tx) => sum + (parseFloat(tx.amount) || 0), 0);
+            const totalTip = group.filter(tx => isTipTransaction(tx)).reduce((sum, tx) => sum + (parseFloat(tx.amount) || 0), 0);
 
-                if (t.isIncome && !txIsTip(t)) totalIncome += (t.amount || 0);
-                if (!t.isIncome) totalEgreso += (t.amount || 0);
+            const cleanDetail = String(t.detail || (isIncome ? 'Servicio' : 'Gasto')).split(' (')[0].split(' — ')[0];
+            const methodLabel = t.method === 'tarjeta_debito' ? 'T.Débito'
+                    : t.method === 'tarjeta_credito' ? 'T.Crédito' : (t.method || 'Efectivo');
 
-                html += `
-                    <tr class="tx-row" data-tx-id="${t.id}" style="cursor:pointer;" title="Ver detalle">
-                        <td style="color:var(--text-dim);white-space:nowrap;">${time}</td>
-                        <td><strong>${t.isIncome ? (t.clientName || 'General') : 'Retiro'}</strong><br><small style="color:var(--text-dim)">${getTxEmployeeName(t)}</small></td>
-                        <td style="max-width:250px;white-space:normal;" title="${(t.detail || '').replace(/"/g, '&quot;')}">${cleanDetail}</td>
-                        <td><span class="badge ${bCl}">${t.isIncome ? 'Ingreso' : 'Egreso'}</span></td>
-                        <td style="color:${tipAmount ? 'var(--gold-400)' : 'var(--text-dim)'}; font-weight:700;" class="text-right">${tipAmount ? '$' + fmt(tipAmount) : '-'}</td>
-                        <td style="color:${t.isIncome ? 'var(--success)' : 'var(--danger)'}; font-weight:700;" class="text-right">
-                            ${t.isIncome ? '+' : '-'}$${fmt(rowAmount)}
-                        </td>
-                    </tr>`;
-            } else {
-                // Prefer the non-tip transaction as the displayed "main" so the row
-                // shows the actual service name, not "Propina — ...".
-                const tMain = group.find(g => !txIsTip(g)) || group[0];
-                const time = tMain.date ? new Date(tMain.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '--:--';
-                let sumAmount = 0;
-                let tipAmount = 0;
-                
-                group.forEach(g => {
-                    const gAmt = parseFloat(g.amount) || 0;
-                    if (txIsTip(g)) { tipAmount += gAmt; }
-                    else if (g.isIncome) { sumAmount += gAmt; totalIncome += gAmt; }
-                    else { sumAmount -= gAmt; totalEgreso += gAmt; }
-                });
-                
-                const txIds = group.map(g => g.id).join(',');
-                const mainDetail = String(tMain.detail || 'Servicio').split(' (')[0];
-                
-                html += `
-                    <tr class="tx-row" data-tx-ids="${txIds}" style="cursor:pointer;" title="Movimiento Mixto">
-                        <td style="color:var(--text-dim);white-space:nowrap;">${time}</td>
-                        <td><strong>${tMain.isIncome ? (tMain.clientName || 'General') : 'Retiro'}</strong><br><small style="color:var(--text-dim)">${getTxEmployeeName(tMain)}</small></td>
-                        <td>
-                            <div style="font-weight:600;">${mainDetail} <span class="badge" style="background:rgba(91,58,138,0.1); color:var(--primary-light); border:1px solid var(--primary-light); font-size:0.6rem; padding: 1px 4px;">Mixto</span></div>
-                        </td>
-                        <td><span class="badge" style="background:rgba(255,255,255,0.05); color:var(--text-secondary); border:1px solid var(--border-subtle);">Ingreso</span></td>
-                        <td style="color:${tipAmount ? 'var(--gold-400)' : 'var(--text-dim)'}; font-weight:700;" class="text-right">${tipAmount ? '$' + fmt(tipAmount) : '-'}</td>
-                        <td style="color:${sumAmount >= 0 ? 'var(--success)' : 'var(--danger)'}; font-weight:700;" class="text-right">
-                            ${sumAmount >= 0 ? '+' : '-'}$${fmt(Math.abs(sumAmount))}
-                        </td>
-                    </tr>`;
-            }
+            html += `
+                <tr class="${isIncome ? 'row-income' : 'row-expense'} tx-row" data-tx-ids="${group.map(tx => tx.id).join(',')}">
+                    <td class="text-dim" style="font-size:0.75rem;">${timeStr}</td>
+                    <td style="font-weight:600;">
+                        ${t.clientName || 'General'}
+                        <br><small style="color:var(--text-dim); font-weight:400;">${getTxEmployeeName(t)}</small>
+                    </td>
+                    <td style="max-width:250px;white-space:normal;" title="${(t.detail || '').replace(/"/g, '&quot;')}">${cleanDetail}</td>
+                    <td>
+                        <div style="display:flex; flex-direction:column; gap:2px;">
+                            <span class="badge ${isIncome ? 'badge-success' : 'badge-danger'}" style="width:fit-content; font-size:0.65rem;">
+                                ${isIncome ? 'INGRESO' : 'EGRESO'}
+                            </span>
+                            <span style="font-size:0.7rem; color:var(--text-dim);">${methodLabel}</span>
+                        </div>
+                    </td>
+                    <td class="text-right" style="color:var(--success); font-weight:600;">
+                        ${totalTip > 0 ? `$${safeFmt(totalTip)}` : '-'}
+                    </td>
+                    <td class="text-right" style="font-weight:700; font-size:1.05rem;">
+                        $${safeFmt(totalGroupAmount)}
+                        ${group.length > 1 ? `
+                        <div style="font-size:0.65rem; color:var(--accent); cursor:help;" title="Este registro incluye múltiples pagos o propina.">
+                            (Desglosado)
+                        </div>` : ''}
+                    </td>
+                </tr>
+                ${group.length > 1 ? `
+                <tr class="detail-row">
+                    <td colspan="6" style="padding:0;">
+                        <div style="font-size:0.8rem; margin:0 15px 15px 15px; padding:12px; background:rgba(255,255,255,0.02); border-radius:8px; border-left:3px solid var(--accent);">
+                            <span style="display:block; font-weight:700; color:var(--accent); margin-bottom:8px; text-transform:uppercase; font-size:0.7rem; letter-spacing:0.5px;">Desglose de Cobro:</span>
+                            ${group.map(tx => {
+                                const isTip = isTipTransaction(tx);
+                                const m = (tx.method || 'Efectivo');
+                                const mLabel = m.charAt(0).toUpperCase() + m.slice(1);
+                                return `
+                                    <div style="display:flex; justify-content:space-between; margin-bottom:3px; font-family:var(--font-mono); font-size:0.75rem;">
+                                        <span style="color:var(--text-dim)">${isTip ? '✦ Propina' : '• ' + mLabel}:</span>
+                                        <span style="font-weight:700; color:${isTip ? 'var(--success)' : 'var(--text-main)'}">$${safeFmt(tx.amount)}</span>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    </td>
+                </tr>` : ''}
+            `;
         } catch (e) {
             console.error('[CAJA] Error renderizando grupo de transacciones:', e, group);
         }
     });
 
     // Fila de totales al pie
+    const totalIncome = todays.filter(t => t.isIncome && !isTipTransaction(t)).reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
+    const totalExpense = todays.filter(t => !t.isIncome).reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
+
     html += `
         <tr style="border-top:2px solid var(--border-subtle); background:rgba(0,0,0,0.2);">
             <td colspan="4" style="font-weight:700; font-size:0.85rem; color:var(--text-secondary);">
                 ${Object.keys(grouped).length} movimiento${Object.keys(grouped).length === 1 ? '' : 's'}
-                ${totalEgreso > 0 ? `<span style="color:var(--danger);margin-left:12px;">Egresos: -$${fmt(totalEgreso)}</span>` : ''}
+                ${totalExpense > 0 ? `<span style="color:var(--danger);margin-left:12px;">Egresos: -$${safeFmt(totalExpense)}</span>` : ''}
             </td>
             <td style="font-weight:700; color:var(--text-secondary); text-align:right; font-size:0.8rem;">TOTAL</td>
-            <td style="font-weight:800; color:var(--success); text-align:right; font-size:1.05rem;">$${fmt(totalIncome - totalEgreso)}</td>
+            <td style="font-weight:800; color:var(--success); text-align:right; font-size:1.05rem;">$${safeFmt(totalIncome - totalExpense)}</td>
         </tr>`;
 
     tbody.innerHTML = html;
@@ -3045,21 +3061,21 @@ function renderTransactionsTable() {
     // Click en fila → abrir detalle
     tbody.querySelectorAll('tr.tx-row').forEach(row => {
         row.addEventListener('click', () => {
-            const txId = row.dataset.txId;
             const txIds = row.dataset.txIds;
-            
-            if (txId) {
-                const tx = db.transactions.find(t => String(t.id) === String(txId));
-                if (tx) openTransactionDetail(tx);
-            } else if (txIds) {
+            if (txIds) {
                 const ids = txIds.split(',');
                 const group = db.transactions.filter(t => ids.includes(String(t.id)));
-                if (group.length > 0) openTransactionDetail(group);
+                if (group.length > 0) {
+                    console.log('[CAJA] Abriendo detalle de:', group);
+                    openTransactionDetail(group.length === 1 ? group[0] : group);
+                }
             }
         });
         row.addEventListener('mouseenter', () => row.style.background = 'rgba(91,58,138,0.15)');
         row.addEventListener('mouseleave', () => row.style.background = '');
     });
+
+    if (window.lucide) window.lucide.createIcons();
 }
 
 function openTransactionDetail(data) {
