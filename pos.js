@@ -92,24 +92,66 @@ function minutesBetweenTimes(startTime, endTime) {
     return end > start ? end - start : null;
 }
 
-function normalizeAppointmentServices(raw) {
+function splitNamedItem(rawName, separators) {
+    return String(rawName || '')
+        .split(separators)
+        .map(name => name.trim())
+        .filter(Boolean);
+}
+
+function normalizeNamedItems(raw, opts = {}) {
+    const splitCompositeNames = opts.splitCompositeNames === true;
+    const separators = splitCompositeNames ? /\s*\+\s*|\s*,\s*/ : /\s*,\s*/;
+
     if (!raw) return [];
-    if (Array.isArray(raw)) return raw.filter(Boolean);
+
     if (typeof raw === 'string') {
         try {
             const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed)) return parsed.filter(Boolean);
+            return normalizeNamedItems(parsed, opts);
         } catch {
-            return raw.split(/\s*\+\s*|\s*,\s*/).filter(Boolean).map(name => ({ name }));
+            return splitNamedItem(raw, separators).map(name => ({ name }));
         }
     }
-    return [];
+
+    if (!Array.isArray(raw)) return [];
+
+    return raw.flatMap(item => {
+        if (!item) return [];
+
+        if (typeof item === 'string') {
+            return splitNamedItem(item, separators).map(name => ({ name }));
+        }
+
+        const name = String(item.name || '').trim();
+        if (!name) return [item];
+
+        const names = splitCompositeNames ? splitNamedItem(name, separators) : [name];
+        if (names.length <= 1) return [{ ...item, name }];
+
+        return names.map(partName => {
+            const normalized = { ...item, name: partName };
+            delete normalized.id;
+            delete normalized.service_id;
+            delete normalized.price;
+            delete normalized.total;
+            return normalized;
+        });
+    });
+}
+
+function normalizeAppointmentServices(raw) {
+    return normalizeNamedItems(raw, { splitCompositeNames: true });
+}
+
+function normalizeTransactionProducts(raw) {
+    return normalizeNamedItems(raw, { splitCompositeNames: false });
 }
 
 function getAppointmentServices(apt) {
     const services = normalizeAppointmentServices(apt?.services);
     if (services.length > 0) return services;
-    return apt?.service ? [{ name: apt.service }] : [];
+    return apt?.service ? normalizeAppointmentServices(apt.service) : [];
 }
 
 function getAppointmentDuration(apt) {
@@ -131,6 +173,16 @@ function getAppointmentDuration(apt) {
 
 function getProductPrice(product) {
     return parseFloat(product?.price) || 0;
+}
+
+function isMissingRemoteTableError(error) {
+    const text = [
+        error?.code,
+        error?.message,
+        error?.details,
+        error?.hint
+    ].filter(Boolean).join(' ');
+    return /PGRST205|42P01|schema cache|relation .* does not exist|table .* does not exist/i.test(text);
 }
 
 function getTxEmployeeName(tx) {
@@ -354,7 +406,7 @@ async function loadDataFromSupabase() {
             method: t.method,
             employee: t.employee,
             employeeId: t.employee_id || null,
-            products: normalizeAppointmentServices(t.products),
+            products: normalizeTransactionProducts(t.products),
             productTotal: parseFloat(t.product_total) || 0
         })},
         { name: 'appointments', stateKey: 'appointments', transform: a => ({
@@ -376,7 +428,7 @@ async function loadDataFromSupabase() {
             price: parseFloat(s.price) || null,
             duration: s.duration ? parseInt(s.duration) : null
         })},
-        { name: 'products', stateKey: 'products', transform: p => ({
+        { name: 'products', stateKey: 'products', schemaPatch: 'supabase_violet_products_patch.sql', transform: p => ({
             ...p,
             price: parseFloat(p.price) || 0,
             stock: p.stock === null || p.stock === undefined ? null : parseFloat(p.stock)
@@ -423,7 +475,11 @@ async function loadDataFromSupabase() {
             // (data leak cross-account) y causaba duplicados visibles en el dropdown.
 
             if (error) {
-                console.warn(`⚠️ Error en ${table.name}:`, error.message);
+                if (table.schemaPatch && isMissingRemoteTableError(error)) {
+                    console.warn(`[SYNC] La tabla remota ${table.name} no existe. Ejecutar ${table.schemaPatch} en Supabase. Usando respaldo local si existe.`);
+                } else {
+                    console.warn(`⚠️ Error en ${table.name}:`, error.message);
+                }
                 const localRows = getLocalDataSnapshot()[table.stateKey];
                 if (Array.isArray(localRows) && localRows.length > 0) {
                     db[table.stateKey] = localRows;
@@ -2765,17 +2821,7 @@ async function saveTransaction() {
     if (userId) inserts.forEach(tx => { tx.user_id = userId; });
     let tData = null, error = null;
     try {
-        // Limpiar columnas que sabemos que no existen en Supabase para evitar el error 400 en consola.
-        // Se guardarán localmente a partir del array 'inserts' original.
-        const cleanInserts = inserts.map(tx => {
-            const clean = { ...tx };
-            delete clean.products;
-            delete clean.product_total;
-            delete clean.employee_id;
-            return clean;
-        });
-
-        const result = await insertRowsSafe('transactions', cleanInserts);
+        const result = await insertRowsSafe('transactions', inserts);
         tData = result.data;
         error = result.error;
     } catch (e) {
@@ -2809,7 +2855,7 @@ async function saveTransaction() {
                 method: t.method || originalTx.method || 'efectivo', 
                 employee: t.employee || originalTx.employee || '',
                 employeeId: t.employee_id || originalTx.employee_id || null,
-                products: normalizeAppointmentServices(t.products || originalTx.products),
+                products: normalizeTransactionProducts(t.products || originalTx.products),
                 productTotal: parseFloat(t.product_total || originalTx.product_total) || 0
             });
         });
@@ -6202,26 +6248,11 @@ function chargeAppointment(id) {
     // 3. Llenar concepto/servicio y calcular monto
     const serviceSelect = document.getElementById('service');
     if (serviceSelect) {
-        const services = getAppointmentServices(apt);
-        console.log('[COBRAR] Servicios detectados en cita:', services);
+        const expandedServices = getAppointmentServices(apt);
+        console.log(`[COBRAR] Servicios detectados en cita (${expandedServices.length}):`, expandedServices);
         
         let totalAmount = 0;
         let firstSrvId = null;
-
-        // Expandir servicios compuestos: "Corte + Esmaltado + Depi" → 3 servicios individuales
-        const expandedServices = [];
-        services.forEach(srvRef => {
-            const rawName = String(srvRef.name || '').trim();
-            if (rawName.includes('+')) {
-                rawName.split(/\s*\+\s*/).filter(Boolean).forEach(subName => {
-                    expandedServices.push({ ...srvRef, name: subName.trim() });
-                });
-            } else {
-                expandedServices.push(srvRef);
-            }
-        });
-
-        console.log(`[COBRAR] Servicios expandidos (${expandedServices.length}):`, expandedServices.map(s => s.name));
 
         // Buscar cada servicio en la DB y acumular resultados
         const resolvedServices = [];

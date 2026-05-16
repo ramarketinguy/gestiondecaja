@@ -10,7 +10,8 @@ alter table public.appointments
 
 alter table public.transactions
     add column if not exists products jsonb default '[]'::jsonb,
-    add column if not exists product_total numeric default 0;
+    add column if not exists product_total numeric default 0,
+    add column if not exists employee_id uuid references public.employees(id) on delete set null;
 
 alter table public.business_config
     add column if not exists weekly_hours jsonb;
@@ -32,6 +33,7 @@ update public.products set user_id = (select id from first_user) where user_id i
 
 create index if not exists idx_products_user_id on public.products(user_id);
 create index if not exists idx_products_active on public.products(active);
+create index if not exists idx_transactions_employee_id on public.transactions(employee_id);
 
 grant usage on schema public to authenticated;
 grant select, insert, update, delete on public.products to authenticated;

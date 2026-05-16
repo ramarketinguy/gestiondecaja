@@ -22,7 +22,7 @@
 ### Pasos Rápidos
 1. Clonar repositorio
 2. Crear proyecto en Supabase y copiar credenciales en `config.js`
-3. Crear tablas siguiendo `SETUP_SUPABASE.md`
+3. Crear tablas ejecutando `supabase_violet_fix.sql`, `supabase_violet_products_patch.sql` y `supabase_violet_closures_patch.sql`
 4. Ejecutar servidor local: `python -m http.server 3000`
 5. Abrir http://localhost:3000
 
@@ -43,8 +43,10 @@ Programa de gestión de caja/
 ├── clients.js                    # Servicio de clientes (CRUD)
 │
 ├── MEMORIA_PROYECTO.md           # Historia del proyecto
-├── FEEDBACK_PROYECTO.md          # Análisis y mejoras
-├── SETUP_SUPABASE.md             # Guía de base de datos
+├── MODIFICACIONES_SINCRO_CAJA.md # Memoria técnica reciente
+├── supabase_violet_fix.sql       # Esquema base y seguridad
+├── supabase_violet_products_patch.sql # Productos y ventas con productos
+├── supabase_violet_closures_patch.sql # Cierres de caja
 ├── README.md                     # Este archivo
 │
 └── Logo/
@@ -62,12 +64,11 @@ cd "Programa de gestión de caja"
 ```
 
 ### Paso 2: Crear Proyecto en Supabase
-**Ver archivo `SETUP_SUPABASE.md` para instrucciones detalladas**
-
 En resumen:
 - Crear proyecto en https://supabase.com
 - Copiar URL y Anon Key
 - Actualizar `config.js`
+- Ejecutar los SQL del proyecto desde Supabase > SQL Editor
 
 ### Paso 3: Servidor Local
 **Opción A - Python:**
@@ -154,7 +155,10 @@ await logout();
 
 ### Tablas Requeridas
 
-**Ver `SETUP_SUPABASE.md` para SQL completo**
+**SQL actual del proyecto:**
+- `supabase_violet_fix.sql` - esquema base, RLS y tablas principales.
+- `supabase_violet_products_patch.sql` - productos, stock y columnas para ventas con productos/servicios múltiples.
+- `supabase_violet_closures_patch.sql` - ajustes de cierres de caja.
 
 Tablas necesarias:
 1. `clients` - Base de datos de clientes
@@ -162,8 +166,11 @@ Tablas necesarias:
 3. `appointments` - Citas/turnos
 4. `tasks` - Tareas del día
 5. `services` - Catálogo de servicios
-6. `employees` - Personal
-7. `business_config` - Configuración del negocio
+6. `products` - Productos vendidos en caja y control opcional de stock
+7. `employees` - Personal
+8. `business_config` - Configuración del negocio
+9. `closures` - Historial de cierres de caja
+10. `client_files` - Archivos/fichas de clientas
 
 ### Seguridad - Row Level Security (RLS)
 

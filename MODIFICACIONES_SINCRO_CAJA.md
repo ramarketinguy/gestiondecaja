@@ -72,8 +72,8 @@ Buscar en la consola (F12) los prefijos:
 - `[SYNC]` — muestra la sincronización con Supabase
 
 ## 6. Recomendaciones Pendientes
-- **`normalizeAppointmentServices()`**: Considerar aplicar la misma lógica de split por `+` directamente en esta función para que TODOS los consumidores (dashboard, agenda, etc.) tengan servicios individuales desde el inicio.
-- **Tabla `products`**: El console muestra un error 404 para `public.products` — la tabla no existe en Supabase. Verificar si es necesaria o si debe crearse.
+- **`normalizeAppointmentServices()`**: RESUELTO el 16 de Mayo, 2026. La separación de servicios compuestos por `+` ahora vive en el normalizador central y aplica también a arrays/JSON ya parseados.
+- **Tabla `products`**: RESUELTO a nivel de repo el 16 de Mayo, 2026. La tabla es necesaria porque la app tiene venta de productos y control opcional de stock. El esquema está en `supabase_violet_products_patch.sql`; si Supabase devuelve 404, falta ejecutar ese patch en el proyecto remoto.
 
 ## 7. Estabilización del Dashboard (Actualización 16 Mayo, 2026)
 
