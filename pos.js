@@ -1733,15 +1733,18 @@ async function executeSaveAppointment(aptData, repeatDates, dateInput, duration,
             }
         } else {
             const savedRows = [];
-            for (const repeatDate of repeatDates) {
-                const row = { ...aptData, apt_date: repeatDate };
-                const insertRes = await insertAppointmentSafe(row);
-                if (insertRes.error) {
-                    if (!shouldSaveAppointmentLocally(insertRes.error)) return showAppointmentSaveError(insertRes.error);
-                    savedRows.push(buildLocalAppointmentRow(row));
-                } else {
-                    savedRows.push(insertRes.data?.[0]);
-                }
+            const recurrenceId = repeatDates.length > 1 ? crypto.randomUUID() : null;
+            
+            const rowsToInsert = repeatDates.map(repeatDate => {
+                return { ...aptData, apt_date: repeatDate, recurrence_id: recurrenceId };
+            });
+            
+            const insertRes = await insertAppointmentSafe(rowsToInsert);
+            if (insertRes.error) {
+                if (!shouldSaveAppointmentLocally(insertRes.error)) return showAppointmentSaveError(insertRes.error);
+                rowsToInsert.forEach(row => savedRows.push(buildLocalAppointmentRow(row)));
+            } else {
+                if (insertRes.data) insertRes.data.forEach(d => savedRows.push(d));
             }
             res = { data: savedRows, error: null };
         }
@@ -2017,25 +2020,63 @@ function renderAgendaSidePanel(dateStr) {
             if (id) editAppointment(id);
         });
     });
-    panel.querySelectorAll('.apt-del-btn').forEach(btn => {
-        btn.addEventListener('click', async (ev) => {
-            ev.stopPropagation();
-            const id = btn.dataset.aptId;
-            const apt = db.appointments.find(a => String(a.id) === String(id));
-            if (!apt) return;
+    // Funcionalidad centralizada para eliminar cita
+    window.handleDeleteAppointment = async function(id, dateStr) {
+        const apt = db.appointments.find(a => String(a.id) === String(id));
+        if (!apt) return;
+        
+        let deleteSeries = false;
+        if (apt.recurrence_id) {
+            const isSeries = await showCustomConfirm(
+                `Esta cita es parte de una repetición.\n\n- "Sí, toda la serie" eliminará desde hoy en adelante.\n- "Solo esta" eliminará únicamente la de este día.`,
+                { title: 'Eliminar Cita Recurrente', confirmText: 'Sí, toda la serie', cancelText: 'Solo esta', danger: true }
+            );
+            // Si el usuario cancela (botón secundario), asumimos que quiere borrar solo esta cita.
+            deleteSeries = isSeries;
+        } else {
             const ok = await showCustomConfirm(
                 `¿Eliminar la cita de ${apt.clientName || apt.client_name} el ${getAppointmentDate(apt)} a las ${getAppointmentTime(apt)}?`,
                 { title: 'Eliminar cita', confirmText: 'Eliminar', danger: true }
             );
             if (!ok) return;
-            const { error } = await deleteRowSafe('appointments', id);
-            if (error) { console.error(error); showToast('Error eliminando cita: ' + error.message, 'error'); return; }
-            db.appointments = db.appointments.filter(a => String(a.id) !== String(id));
+        }
+
+        try {
+            if (deleteSeries && apt.recurrence_id) {
+                const { error } = await window.supabaseClient.from('appointments')
+                    .delete()
+                    .eq('recurrence_id', apt.recurrence_id)
+                    .gte('apt_date', getAppointmentDate(apt));
+                
+                if (error) throw error;
+                
+                db.appointments = db.appointments.filter(a => !(a.recurrence_id === apt.recurrence_id && getAppointmentDate(a) >= getAppointmentDate(apt)));
+                showToast('Serie de citas eliminada');
+            } else {
+                const { error } = await deleteRowSafe('appointments', id);
+                if (error) throw error;
+                db.appointments = db.appointments.filter(a => String(a.id) !== String(id));
+                showToast('Cita eliminada');
+            }
             persistCollectionLocal('appointments', db.appointments);
-            showToast('Cita eliminada');
-            renderAgendaSidePanel(dateStr);
-            renderAgendaMonth();
-            if (document.getElementById('agenda-date-picker').value === dateStr) renderAgenda(dateStr);
+            
+            // Re-render
+            if (typeof renderAgendaSidePanel === 'function') renderAgendaSidePanel(dateStr);
+            if (typeof renderAgendaMonth === 'function' && !document.getElementById('agenda-month-view').classList.contains('hidden')) renderAgendaMonth();
+            const picker = document.getElementById('agenda-date-picker');
+            if (typeof renderAgenda === 'function' && picker && picker.value === dateStr) renderAgenda(dateStr);
+            
+        } catch (err) {
+            console.error(err);
+            showToast('Error eliminando cita: ' + err.message, 'error');
+        }
+    };
+
+    panel.querySelectorAll('.apt-del-btn').forEach(btn => {
+        btn.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            const id = btn.dataset.aptId;
+            if (window.handleDeleteAppointment) window.handleDeleteAppointment(id, dateStr);
         });
     });
 
@@ -2246,18 +2287,7 @@ function renderAgendaDaySidePanel(dateStr) {
         btn.addEventListener('click', async (ev) => {
             ev.stopPropagation();
             const id = btn.dataset.aptId;
-            const apt = db.appointments.find(a => String(a.id) === String(id));
-            if (!apt) return;
-            const ok = await showCustomConfirm(
-                `¿Eliminar la cita de ${apt.clientName || apt.client_name} el ${getAppointmentDate(apt)} a las ${getAppointmentTime(apt)}?`,
-                { title: 'Eliminar cita', confirmText: 'Eliminar', danger: true }
-            );
-            if (!ok) return;
-            const { error } = await window.supabaseClient.from('appointments').delete().eq('id', id);
-            if (error) { console.error(error); showToast('Error eliminando cita: ' + error.message, 'error'); return; }
-            db.appointments = db.appointments.filter(a => String(a.id) !== String(id));
-            showToast('Cita eliminada');
-            renderAgenda(dateStr);
+            if (window.handleDeleteAppointment) window.handleDeleteAppointment(id, dateStr);
         });
     });
 

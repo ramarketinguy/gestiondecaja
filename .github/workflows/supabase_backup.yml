@@ -1,0 +1,39 @@
+name: Supabase Daily Backup
+
+on:
+  schedule:
+    # Ejecutar todos los días a las 03:00 AM UTC (00:00 AM hora Uruguay/Argentina)
+    - cron: '0 3 * * *'
+  workflow_dispatch: # Permite ejecutar el workflow manualmente desde GitHub
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        
+      - name: Set up Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+          
+      - name: Create backups directory
+        run: mkdir -p backups
+        
+      - name: Dump Database
+        env:
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          supabase db dump --db-url "postgresql://postgres:${SUPABASE_DB_PASSWORD}@db.${SUPABASE_PROJECT_REF}.supabase.co:5432/postgres" -f backups/daily_backup.sql
+          
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add backups/daily_backup.sql
+          # Si no hay cambios (la BD es igual), el commit fallará, así que ignoramos el error
+          git commit -m "chore: backup automático diario de la base de datos" || echo "No hay cambios para respaldar"
+          git push
