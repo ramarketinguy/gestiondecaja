@@ -1350,7 +1350,15 @@ async function editAppointment(id) {
     const aptEmpId = getAppointmentEmployeeId(apt);
     if (aptEmp && aptEmpId) { aptEmp.value = aptEmpId; syncCustomSelect('apt-employee'); }
     const title = document.getElementById('apt-modal-title');
-    if (title) title.textContent = 'Editar Cita';
+    if (apt.recurrence_id) {
+        if (title) title.innerHTML = 'Editar Cita <span style="font-size:0.7rem;background:var(--primary);padding:2px 6px;border-radius:4px;margin-left:8px;">Serie Recurrente</span>';
+        const repeatSel = document.getElementById('apt-repeat');
+        if (repeatSel) { repeatSel.value = 'none'; repeatSel.disabled = true; syncCustomSelect('apt-repeat'); }
+    } else {
+        if (title) title.textContent = 'Editar Cita';
+        const repeatSel = document.getElementById('apt-repeat');
+        if (repeatSel) { repeatSel.disabled = false; }
+    }
 }
 
 function openAppointmentDetail(apt) {
@@ -1723,13 +1731,35 @@ async function executeSaveAppointment(aptData, repeatDates, dateInput, duration,
     let res;
     try {
         if (editingAppointmentId) {
-            // Para update, no enviar user_id (es inmutable)
+            const originalApt = db.appointments.find(a => String(a.id) === String(editingAppointmentId));
             const updateData = { ...aptData };
             delete updateData.user_id;
-            res = await updateRowSafe('appointments', editingAppointmentId, updateData);
-            if (res.error || !res.data?.[0]) {
-                if (!shouldSaveAppointmentLocally(res.error)) return showAppointmentSaveError(res.error);
-                res = { data: [buildLocalAppointmentRow(updateData, editingAppointmentId)], error: null };
+
+            let updateSeries = false;
+            if (originalApt && originalApt.recurrence_id) {
+                updateSeries = await showCustomConfirm(
+                    `Estás editando una cita que es parte de una serie repetitiva.\n\n- "Toda la serie" aplicará los cambios (hora, servicio, nota, etc.) a esta cita y a TODAS las futuras.\n- "Solo esta" aplicará los cambios únicamente hoy.`,
+                    { title: 'Editar Serie Recurrente', confirmText: 'Toda la serie', cancelText: 'Solo esta' }
+                );
+            }
+
+            if (updateSeries && originalApt.recurrence_id) {
+                // No se debe cambiar la fecha de cada instancia a la fecha de edit, se debe mantener la apt_date de cada una
+                delete updateData.apt_date; 
+                delete updateData.date;
+
+                const { data, error } = await window.supabaseClient.from('appointments')
+                    .update(updateData)
+                    .eq('recurrence_id', originalApt.recurrence_id)
+                    .gte('apt_date', getAppointmentDate(originalApt))
+                    .select();
+                res = { data, error };
+            } else {
+                res = await updateRowSafe('appointments', editingAppointmentId, updateData);
+                if (res.error || !res.data?.[0]) {
+                    if (!shouldSaveAppointmentLocally(res.error)) return showAppointmentSaveError(res.error);
+                    res = { data: [buildLocalAppointmentRow(updateData, editingAppointmentId)], error: null };
+                }
             }
         } else {
             const savedRows = [];
@@ -1769,10 +1799,12 @@ async function executeSaveAppointment(aptData, repeatDates, dateInput, duration,
                 duration: raw.duration ? parseInt(raw.duration, 10) : duration,
                 endTime: normalizeTimeValue(raw.end_time || raw.endTime || endTime)
             };
-            if (editingAppointmentId && String(apt.id) === String(editingAppointmentId)) {
-                const idx = db.appointments.findIndex(a => String(a.id) === String(editingAppointmentId));
+            if (editingAppointmentId) {
+                const idx = db.appointments.findIndex(a => String(a.id) === String(apt.id));
                 if (idx >= 0) db.appointments[idx] = apt;
             } else {
+                db.appointments.push(apt);
+            }
                 db.appointments.push(apt);
             }
         });
