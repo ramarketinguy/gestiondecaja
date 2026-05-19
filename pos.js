@@ -1805,8 +1805,6 @@ async function executeSaveAppointment(aptData, repeatDates, dateInput, duration,
             } else {
                 db.appointments.push(apt);
             }
-                db.appointments.push(apt);
-            }
         });
         
         showToast('Cita guardada con éxito');
