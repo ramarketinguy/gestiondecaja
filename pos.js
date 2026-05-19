@@ -457,6 +457,67 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
 });
 
+// ==========================================
+// VISIBILIDAD: Restaurar app al volver a la pestaña
+// ==========================================
+let _visibilityRestoring = false;
+document.addEventListener('visibilitychange', async () => {
+    if (document.hidden || _visibilityRestoring) return;
+    _visibilityRestoring = true;
+    console.log('[VIOLET] Pestaña visible de nuevo, verificando estado...');
+
+    // 1. Actualizar fecha del sidebar si cambió de día
+    const sidebarDate = document.getElementById('sidebar-date');
+    if (sidebarDate) {
+        const now = new Date();
+        sidebarDate.textContent = now.toLocaleDateString('es-UY', {
+            weekday: 'long', day: 'numeric', month: 'long'
+        });
+    }
+
+    // 2. Verificar sesión de Supabase
+    try {
+        if (!window.supabaseClient) { _visibilityRestoring = false; return; }
+        const { data: { session } } = await window.supabaseClient.auth.getSession();
+        if (!session) {
+            console.warn('[VIOLET] Sesión expirada al volver. Redirigiendo...');
+            showToast('Tu sesión expiró. Redirigiendo al login...', 'error');
+            _visibilityRestoring = false;
+            setTimeout(() => { window.location.href = 'index.html'; }, 1500);
+            return;
+        }
+
+        // 3. Sesión válida: actualizar estado de auth y recargar datos
+        setState('auth.session', session);
+        setState('auth.user', session.user);
+        setState('auth.isAuthenticated', true);
+        await loadDataFromSupabase();
+
+        // 4. Re-renderizar la vista activa
+        const view = window.currentView || 'dashboard';
+        if (view === 'dashboard' && typeof initDashboard === 'function') initDashboard();
+        else if (view === 'agenda' && typeof renderAgenda === 'function') {
+            const picker = document.getElementById('agenda-date-picker');
+            renderAgenda(picker?.value || new Date().toISOString().slice(0, 10));
+            if (typeof renderAgendaSidePanel === 'function') renderAgendaSidePanel(picker?.value);
+        }
+        else if (view === 'caja') {
+            if (typeof updateStats === 'function') updateStats();
+            if (typeof renderTransactionsTable === 'function') renderTransactionsTable();
+        }
+        else if (view === 'crm' && typeof renderCRMClientList === 'function') renderCRMClientList();
+        else if (view === 'staff' && typeof renderStaffPanel === 'function') renderStaffPanel();
+
+        // 5. Refrescar iconos
+        if (typeof lucide !== 'undefined' && lucide.createIcons) lucide.createIcons();
+        console.log('[VIOLET] App restaurada correctamente');
+    } catch (err) {
+        console.error('[VIOLET] Error al restaurar:', err);
+    } finally {
+        _visibilityRestoring = false;
+    }
+});
+
 let _isDataLoading = false;
 async function loadDataFromSupabase() {
     if (_isDataLoading) {
@@ -696,12 +757,21 @@ function getAppointmentRepeatDates(firstDate) {
     const repeat = document.getElementById('apt-repeat')?.value || 'none';
     if (repeat === 'none' || editingAppointmentId) return [firstDate];
 
-    const count = Math.min(Math.max(parseInt(document.getElementById('apt-repeat-count')?.value, 10) || 1, 1), 52);
-    const days = repeat === 'weekly'
-        ? 7
-        : repeat === 'biweekly'
-            ? 14
-            : Math.min(Math.max(parseInt(document.getElementById('apt-repeat-days')?.value, 10) || 7, 1), 365);
+    let days, count;
+
+    if (repeat === 'weekly') {
+        days = 7;
+        count = 52; // Indefinido: 1 año
+    } else if (repeat === 'biweekly') {
+        days = 14;
+        count = 26; // Indefinido: 1 año
+    } else {
+        // Variable: el usuario elige cada cuántos días
+        days = Math.min(Math.max(parseInt(document.getElementById('apt-repeat-days')?.value, 10) || 7, 1), 365);
+        const userCount = parseInt(document.getElementById('apt-repeat-count')?.value, 10);
+        // Si no pone cantidad, se toma como indefinido (calcula cuántas citas caben en 1 año)
+        count = (userCount && userCount >= 2) ? Math.min(userCount, 52) : Math.max(Math.floor(365 / days), 2);
+    }
 
     return Array.from({ length: count }, (_, idx) => addDaysToDateString(firstDate, idx * days));
 }
@@ -1156,11 +1226,33 @@ function initAgenda() {
         const repeatCountInput = document.getElementById('apt-repeat-count');
         if (repeatSelect && repeatCustomWrap) {
             repeatSelect.addEventListener('change', () => {
-                const repeats = repeatSelect.value !== 'none';
-                repeatCustomWrap.classList.toggle('hidden', repeatSelect.value !== 'custom');
+                const val = repeatSelect.value;
+                const isVariable = val === 'custom';
+
+                // Mostrar campo de cantidad SOLO para Variable
+                const countWrap = document.getElementById('apt-repeat-count-wrap');
+                if (countWrap) countWrap.classList.toggle('hidden', !isVariable);
+
+                // Mostrar/ocultar campo de días custom
+                repeatCustomWrap.classList.toggle('hidden', !isVariable);
+
+                // Mostrar info de "indefinido" para semanal/quincenal
+                const infoWrap = document.getElementById('apt-repeat-info');
+                const infoText = document.getElementById('apt-repeat-info-text');
+                if (infoWrap) {
+                    const showInfo = val === 'weekly' || val === 'biweekly';
+                    infoWrap.classList.toggle('hidden', !showInfo);
+                    if (infoText) {
+                        infoText.textContent = val === 'weekly'
+                            ? 'Se agendarán citas semanales de forma indefinida (1 año)'
+                            : 'Se agendarán citas quincenales de forma indefinida (1 año)';
+                    }
+                }
+
+                // Reset count field
                 if (repeatCountInput) {
-                    repeatCountInput.disabled = !repeats;
-                    repeatCountInput.value = repeats ? (repeatCountInput.value || '4') : '';
+                    repeatCountInput.disabled = !isVariable;
+                    repeatCountInput.value = '';
                 }
             });
         }
@@ -1206,8 +1298,12 @@ function openAgendarModal(preselectedDate = null, preselectedTime = null) {
     if (repeatSel) { repeatSel.value = 'none'; syncCustomSelect('apt-repeat'); }
     const repeatCount = document.getElementById('apt-repeat-count');
     if (repeatCount) { repeatCount.value = ''; repeatCount.disabled = true; }
+    const repeatCountWrap = document.getElementById('apt-repeat-count-wrap');
+    if (repeatCountWrap) repeatCountWrap.classList.add('hidden');
     const repeatCustom = document.getElementById('apt-repeat-custom-wrap');
     if (repeatCustom) repeatCustom.classList.add('hidden');
+    const repeatInfo = document.getElementById('apt-repeat-info');
+    if (repeatInfo) repeatInfo.classList.add('hidden');
 }
 function closeAgendarModal() {
     document.getElementById('modal-appointment').classList.remove('open');
