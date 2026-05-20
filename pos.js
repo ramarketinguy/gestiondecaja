@@ -773,7 +773,9 @@ function getAppointmentRepeatDates(firstDate) {
         count = (userCount && userCount >= 2) ? Math.min(userCount, 52) : Math.max(Math.floor(365 / days), 2);
     }
 
-    return Array.from({ length: count }, (_, idx) => addDaysToDateString(firstDate, idx * days));
+    const repeatDates = Array.from({ length: count }, (_, idx) => addDaysToDateString(firstDate, idx * days));
+    console.log(`[Agenda] Cita recurrente: mode=${repeat}, count=${count}, days=${days}, generadas=${repeatDates.length}`);
+    return repeatDates;
 }
 
 // Helper reutilizable para subir foto de cliente
@@ -1231,7 +1233,11 @@ function initAgenda() {
 
                 // Mostrar campo de cantidad SOLO para Variable
                 const countWrap = document.getElementById('apt-repeat-count-wrap');
-                if (countWrap) countWrap.classList.toggle('hidden', !isVariable);
+                if (countWrap) {
+                    countWrap.classList.toggle('hidden', !isVariable);
+                    repeatCountInput.disabled = !isVariable;
+                    if (!isVariable) repeatCountInput.value = '';
+                }
 
                 // Mostrar/ocultar campo de días custom
                 repeatCustomWrap.classList.toggle('hidden', !isVariable);
