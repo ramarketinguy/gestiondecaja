@@ -1359,7 +1359,18 @@ async function editAppointment(id) {
     if (apt.recurrence_id) {
         if (title) title.innerHTML = 'Editar Cita <span style="font-size:0.7rem;background:var(--primary);padding:2px 6px;border-radius:4px;margin-left:8px;">Serie Recurrente</span>';
         const repeatSel = document.getElementById('apt-repeat');
-        if (repeatSel) { repeatSel.value = 'none'; repeatSel.disabled = true; syncCustomSelect('apt-repeat'); }
+        if (repeatSel) { 
+            if (!repeatSel.querySelector('option[value="recurring"]')) {
+                const opt = document.createElement('option');
+                opt.value = 'recurring';
+                opt.textContent = 'Serie Recurrente';
+                opt.hidden = true;
+                repeatSel.appendChild(opt);
+            }
+            repeatSel.value = 'recurring'; 
+            repeatSel.disabled = true; 
+            syncCustomSelect('apt-repeat'); 
+        }
     } else {
         if (title) title.textContent = 'Editar Cita';
         const repeatSel = document.getElementById('apt-repeat');
