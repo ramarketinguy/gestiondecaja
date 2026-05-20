@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.anthropic.com; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self';">
     <title>Violet | Sistema de Gestión y ERP</title>
     <meta name="description" content="Sistema de gestión, CRM y agenda profesional para Violet Peluquería Unisex">
     
@@ -20,7 +21,7 @@
     <!-- Supabase -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     
-    <link rel="stylesheet" href="pos.css?v=202605160002">
+    <link rel="stylesheet" href="pos.css?v=202605200004">
 </head>
 <body>
 
@@ -197,6 +198,17 @@
                          <!-- Llenado por JS -->
                     </div>
                 </div>
+
+                <!-- Widget Avisos Operativos -->
+                <div class="widget-card">
+                    <div class="widget-header">
+                        <div class="widget-icon" style="color: var(--warning); background: rgba(234,179,8,0.12);"><i data-lucide="bell-ring"></i></div>
+                        <h3>Avisos</h3>
+                    </div>
+                    <div class="widget-body" id="widget-alerts">
+                        <!-- Llenado por JS -->
+                    </div>
+                </div>
             </div>
         </section>
 
@@ -297,6 +309,9 @@
                     <button class="btn btn-sm" id="btn-open-closure" style="background:rgba(91,58,138,0.3); border:1px solid var(--violet-500); color:var(--gold-400); backdrop-filter:blur(4px);">
                         <i data-lucide="lock"></i> Cierre de Caja Diario
                     </button>
+                    <button class="btn btn-sm" id="btn-start-deposit" style="background:rgba(96,165,250,0.12); border:1px solid rgba(96,165,250,0.35); color:var(--info); backdrop-filter:blur(4px);">
+                        <i data-lucide="piggy-bank"></i> Registrar Seña
+                    </button>
                     <!-- Toggle Switch Ingreso/Egreso -->
                     <div class="toggle-transaction">
                         <label class="switch">
@@ -330,6 +345,7 @@
                                     <!-- Rellenado por JS -->
                                 </select>
                             </div>
+                            <div id="pos-selected-services" class="apt-selected-services"></div>
                             <!-- Desglose de servicios (visible al cobrar desde agenda) -->
                             <div id="pos-services-breakdown" class="hidden" style="margin-top:8px; background:rgba(91,58,138,0.12); border:1px solid rgba(155,114,212,0.25); border-radius:10px; padding:10px 14px; font-size:0.82rem;">
                                 <div style="font-weight:700; color:var(--violet-300); margin-bottom:6px; font-size:0.72rem; text-transform:uppercase; letter-spacing:0.5px;">Desglose de servicios</div>
@@ -927,6 +943,7 @@
                                     <option value="none">No repetir</option>
                                     <option value="weekly">Semanal</option>
                                     <option value="biweekly">Quincenal</option>
+                                    <option value="monthly">Mensual</option>
                                     <option value="custom">Variable</option>
                                 </select>
                             </div>
@@ -1081,10 +1098,16 @@
                         <i data-lucide="trash-2" style="width:14px;height:14px;"></i>
                         <span>Eliminar</span>
                     </button>
-                    <button type="button" class="btn btn-primary" id="btn-save-client">
-                        <i data-lucide="save"></i>
-                        <span>Guardar Perfil</span>
-                    </button>
+                    <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
+                        <button type="button" class="btn btn-ghost hidden" id="btn-client-add-deposit">
+                            <i data-lucide="piggy-bank"></i>
+                            <span>Agregar Seña</span>
+                        </button>
+                        <button type="button" class="btn btn-primary" id="btn-save-client">
+                            <i data-lucide="save"></i>
+                            <span>Guardar Perfil</span>
+                        </button>
+                    </div>
                 </div>
             </form>
         </div>
@@ -1535,14 +1558,14 @@
                     <label>Nueva Contraseña</label>
                     <div class="input-wrap">
                         <i data-lucide="lock"></i>
-                        <input type="password" id="new-password-input" placeholder="••••••••" minlength="6">
+                        <input type="password" id="new-password-input" placeholder="••••••••••" minlength="10" autocomplete="new-password">
                     </div>
                 </div>
                 <div class="form-group" style="margin-top:1rem;">
                     <label>Confirmar Contraseña</label>
                     <div class="input-wrap">
                         <i data-lucide="lock"></i>
-                        <input type="password" id="confirm-password-input" placeholder="••••••••" minlength="6">
+                        <input type="password" id="confirm-password-input" placeholder="••••••••••" minlength="10" autocomplete="new-password">
                     </div>
                 </div>
                 <div id="chgpwd-alert" style="display:none; margin-top:1rem; padding:0.75rem 1rem; border-radius:8px; font-size:0.85rem;"></div>
@@ -1628,8 +1651,8 @@
     <script src="auth.js?v=202604260900"></script>
     <script src="supabase-helpers.js?v=202605151230"></script>
     <script src="clients.js?v=202604260900"></script>
-    <script src="pos.js?v=202605160002"></script>
-    <script src="pos.dashboard.js?v=202605160001"></script>
+    <script src="pos.js?v=202605200004"></script>
+    <script src="pos.dashboard.js?v=202605200004"></script>
     <script src="pos.services.js?v=202604260900"></script>
     <script src="pos.config.js?v=202605140600"></script>
     <!-- Modal: Cierre de Caja (Formulario) -->
@@ -1774,7 +1797,7 @@
         const confirmPwd = document.getElementById('confirm-password-input').value;
         chgPwdAlert.style.display = 'none';
 
-        if (!newPwd || newPwd.length < 6) { showChgPwdMsg('La contraseña debe tener al menos 6 caracteres.'); return; }
+        if (!newPwd || newPwd.length < 10) { showChgPwdMsg('La contrasena debe tener al menos 10 caracteres.'); return; }
         if (newPwd !== confirmPwd) { showChgPwdMsg('Las contraseñas no coinciden. Verificá y volvé a intentar.'); return; }
 
         const btn = document.getElementById('btn-chgpwd-confirm');

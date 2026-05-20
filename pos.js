@@ -18,6 +18,7 @@ let _pendingAptClientName = null;
 let _clientModalSavedCallback = null;
 let _reopenAgendaAfterSave = false;
 let appointmentSelectedServiceIds = [];
+let posSelectedServices = [];
 let posSelectedProducts = [];
 let editingProductId = null;
 
@@ -173,6 +174,127 @@ function getAppointmentDuration(apt) {
 
 function getProductPrice(product) {
     return parseFloat(product?.price) || 0;
+}
+
+function normalizeSearchText(value) {
+    return String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .trim();
+}
+
+const BUSINESS_ALERTS_KEY = 'violet_business_alerts';
+const AI_KEY_STORAGE = 'violet_ai_key_session';
+
+function getAIKey() {
+    const legacyKey = localStorage.getItem('violet_ai_key');
+    if (legacyKey) {
+        sessionStorage.setItem(AI_KEY_STORAGE, legacyKey);
+        localStorage.removeItem('violet_ai_key');
+    }
+    return sessionStorage.getItem(AI_KEY_STORAGE) || '';
+}
+
+function setAIKey(key) {
+    localStorage.removeItem('violet_ai_key');
+    sessionStorage.setItem(AI_KEY_STORAGE, key);
+}
+
+function getStoredBusinessAlerts() {
+    try {
+        return JSON.parse(localStorage.getItem(BUSINESS_ALERTS_KEY) || '[]');
+    } catch (_) {
+        return [];
+    }
+}
+
+function addBusinessAlert(alert) {
+    const alerts = getStoredBusinessAlerts();
+    alerts.unshift({ id: createLocalId('alert'), createdAt: new Date().toISOString(), ...alert });
+    localStorage.setItem(BUSINESS_ALERTS_KEY, JSON.stringify(alerts.slice(0, 30)));
+}
+
+function isLocalRecordId(id) {
+    return /^(client|apt|tx|srv|prod|closure|file|task)_/.test(String(id || ''));
+}
+
+function findClientByName(name) {
+    const q = normalizeSearchText(name);
+    if (!q) return null;
+    return (db.clients || []).find(c => normalizeSearchText(c.name) === q) || null;
+}
+
+function replaceClientInMemory(oldId, savedClient) {
+    if (!savedClient) return savedClient;
+    const oldIdText = String(oldId || savedClient.id);
+    const idx = (db.clients || []).findIndex(c =>
+        String(c.id) === oldIdText ||
+        (c.name && savedClient.name && normalizeSearchText(c.name) === normalizeSearchText(savedClient.name))
+    );
+    if (idx >= 0) db.clients[idx] = { ...db.clients[idx], ...savedClient };
+    else db.clients.push(savedClient);
+    persistCollectionLocal('clients', db.clients);
+    return savedClient;
+}
+
+async function ensureClientExistsForRemoteSave(client, typedName = '') {
+    const baseClient = client || findClientByName(typedName);
+    if (!baseClient) return null;
+    if (!window.supabaseClient) return baseClient;
+
+    const needsRemoteInsert = isLocalRecordId(baseClient.id) || baseClient.pendingSync;
+    if (!needsRemoteInsert) {
+        try {
+            const query = await window.supabaseClient
+                .from('clients')
+                .select('*')
+                .eq('id', baseClient.id)
+                .maybeSingle();
+            if (query.data) return baseClient;
+            if (query.error) {
+                console.warn('[Clientes] No se pudo verificar la clienta remota:', query.error);
+                return baseClient;
+            }
+        } catch (err) {
+            console.warn('[Clientes] Verificacion remota omitida:', err);
+            return baseClient;
+        }
+    }
+
+    const payload = {
+        name: baseClient.name || typedName,
+        phone: baseClient.phone || '',
+        instagram: baseClient.instagram || '',
+        birthday: baseClient.birthday || null,
+        notes: baseClient.notes || '',
+        balance: parseFloat(baseClient.balance) || 0,
+        debt: parseFloat(baseClient.debt) || 0
+    };
+    const { data, error } = await insertClientSafe(payload);
+    if (error || !data?.[0]) {
+        console.warn('[Clientes] No se pudo crear clienta remota:', error);
+        return baseClient;
+    }
+    return replaceClientInMemory(baseClient.id, data[0]);
+}
+
+async function resolveAppointmentClient(nameInput) {
+    const typedName = String(nameInput || '').trim();
+    if (!typedName) return null;
+
+    if (aptCurrentClient && normalizeSearchText(aptCurrentClient.name) !== normalizeSearchText(typedName)) {
+        aptCurrentClient = null;
+    }
+
+    let client = aptCurrentClient || findClientByName(typedName);
+    if (!client) {
+        showToast('Creando clienta...', 'info');
+        client = await createClient(typedName);
+    }
+    client = await ensureClientExistsForRemoteSave(client, typedName);
+    aptCurrentClient = client;
+    return client;
 }
 
 function escapeHtml(value) {
@@ -545,6 +667,7 @@ async function loadDataFromSupabase() {
             method: t.method,
             employee: t.employee,
             employeeId: t.employee_id || null,
+            services: normalizeAppointmentServices(t.services),
             products: normalizeTransactionProducts(t.products),
             productTotal: parseFloat(t.product_total) || 0
         })},
@@ -753,6 +876,15 @@ function addDaysToDateString(dateStr, days) {
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
+function addMonthsToDateString(dateStr, months) {
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const date = new Date(year, month - 1 + months, 1);
+    const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+    date.setDate(Math.min(day, lastDay));
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+/* Legacy repeat logic kept out of runtime; monthly-aware logic is below.
 function getAppointmentRepeatDates(firstDate) {
     const repeat = document.getElementById('apt-repeat')?.value || 'none';
     if (repeat === 'none' || editingAppointmentId) return [firstDate];
@@ -777,9 +909,39 @@ function getAppointmentRepeatDates(firstDate) {
     console.log(`[Agenda] Cita recurrente: mode=${repeat}, count=${count}, days=${days}, generadas=${repeatDates.length}`);
     return repeatDates;
 }
+*/
+
+function getAppointmentRepeatDates(firstDate) {
+    const repeat = document.getElementById('apt-repeat')?.value || 'none';
+    if (repeat === 'none' || editingAppointmentId) return [firstDate];
+
+    if (repeat === 'monthly') {
+        const repeatDates = Array.from({ length: 12 }, (_, idx) => addMonthsToDateString(firstDate, idx));
+        console.log(`[Agenda] Cita recurrente: mode=${repeat}, count=12, generadas=${repeatDates.length}`);
+        return repeatDates;
+    }
+
+    let days = 7;
+    let count = 52;
+    if (repeat === 'biweekly') {
+        days = 14;
+        count = 26;
+    } else if (repeat === 'custom') {
+        days = Math.min(Math.max(parseInt(document.getElementById('apt-repeat-days')?.value, 10) || 7, 1), 365);
+        const userCount = parseInt(document.getElementById('apt-repeat-count')?.value, 10);
+        count = (userCount && userCount >= 2) ? Math.min(userCount, 52) : Math.max(Math.floor(365 / days), 2);
+    }
+    const repeatDates = Array.from({ length: count }, (_, idx) => addDaysToDateString(firstDate, idx * days));
+    console.log(`[Agenda] Cita recurrente: mode=${repeat}, count=${count}, days=${days}, generadas=${repeatDates.length}`);
+    return repeatDates;
+}
 
 // Helper reutilizable para subir foto de cliente
 async function uploadClientPhoto(file, clientId) {
+    if (!file || !/^image\/(png|jpe?g|webp|gif)$/i.test(file.type || '')) {
+        showToast('Formato de imagen no permitido.', 'error');
+        return;
+    }
     showToast('Subiendo foto...', 'info');
     const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
     const filePath = `clients/${clientId}_${Date.now()}.${ext}`;
@@ -1083,6 +1245,35 @@ function initCustomSelects() {
         // Crear opciones
         const optionsList = document.createElement('div');
         optionsList.className = 'custom-options';
+        const searchable = !select.classList.contains('time-select') && select.options.length > 6;
+        let searchInput = null;
+        let optionDivs = [];
+
+        if (searchable) {
+            const searchWrap = document.createElement('div');
+            searchWrap.className = 'custom-option-search';
+            searchInput = document.createElement('input');
+            searchInput.type = 'search';
+            searchInput.placeholder = 'Escribir para buscar...';
+            searchInput.autocomplete = 'off';
+            searchWrap.appendChild(searchInput);
+            optionsList.appendChild(searchWrap);
+
+            searchInput.addEventListener('click', e => e.stopPropagation());
+            searchInput.addEventListener('input', () => {
+                const q = normalizeSearchText(searchInput.value);
+                optionDivs.forEach(optionDiv => {
+                    const match = !q || optionDiv.dataset.search.includes(q);
+                    optionDiv.classList.toggle('hidden', !match);
+                });
+            });
+            searchInput.addEventListener('keydown', e => {
+                if (e.key !== 'Enter') return;
+                e.preventDefault();
+                const first = optionDivs.find(optionDiv => !optionDiv.classList.contains('hidden'));
+                if (first) first.click();
+            });
+        }
         
         Array.from(select.options).forEach((opt, idx) => {
             if(opt.style.display === 'none') return; // ignore hidden placeholder
@@ -1090,18 +1281,21 @@ function initCustomSelects() {
             optionDiv.className = `custom-option ${select.selectedIndex === idx ? 'selected' : ''}`;
             optionDiv.textContent = opt.text;
             optionDiv.dataset.value = opt.value;
+            optionDiv.dataset.search = normalizeSearchText(`${opt.text} ${opt.value}`);
             
             optionDiv.addEventListener('click', () => {
                 select.value = opt.value;
                 select.dispatchEvent(new Event('change')); // Disparar change native
                 
-                trigger.querySelector('span').textContent = opt.text;
+                const currentOption = select.options[select.selectedIndex];
+                trigger.querySelector('span').textContent = currentOption ? currentOption.text : opt.text;
                 
                 optionsList.querySelectorAll('.custom-option').forEach(o => o.classList.remove('selected'));
-                optionDiv.classList.add('selected');
+                optionDivs.forEach(o => o.classList.toggle('selected', o.dataset.value === select.value));
                 
                 wrapper.classList.remove('open');
             });
+            optionDivs.push(optionDiv);
             optionsList.appendChild(optionDiv);
         });
         
@@ -1116,6 +1310,11 @@ function initCustomSelects() {
                 if(w !== wrapper) w.classList.remove('open');
             });
             wrapper.classList.toggle('open');
+            if (wrapper.classList.contains('open') && searchInput) {
+                searchInput.value = '';
+                optionDivs.forEach(optionDiv => optionDiv.classList.remove('hidden'));
+                setTimeout(() => searchInput.focus(), 0);
+            }
         });
     });
     
@@ -1246,9 +1445,11 @@ function initAgenda() {
                 const infoWrap = document.getElementById('apt-repeat-info');
                 const infoText = document.getElementById('apt-repeat-info-text');
                 if (infoWrap) {
-                    const showInfo = val === 'weekly' || val === 'biweekly';
+                    const showInfo = val === 'weekly' || val === 'biweekly' || val === 'monthly';
                     infoWrap.classList.toggle('hidden', !showInfo);
-                    if (infoText) {
+                    if (infoText && val === 'monthly') {
+                        infoText.textContent = 'Se agendaran citas mensuales de forma indefinida (1 ano)';
+                    } else if (infoText) {
                         infoText.textContent = val === 'weekly'
                             ? 'Se agendarán citas semanales de forma indefinida (1 año)'
                             : 'Se agendarán citas quincenales de forma indefinida (1 año)';
@@ -1403,7 +1604,7 @@ function initAptClientAutocomplete() {
         matches.forEach(client => {
             const div = document.createElement('div');
             div.className = 'autocomplete-item';
-            div.innerHTML = `<span class="ac-name">${client.name}</span><span class="ac-phone">${client.phone || ''}</span>`;
+            div.innerHTML = `<span class="ac-name">${escapeHtml(client.name)}</span><span class="ac-phone">${escapeHtml(client.phone || '')}</span>`;
             div.addEventListener('click', () => {
                 input.value = client.name;
                 aptCurrentClient = client;
@@ -1418,7 +1619,7 @@ function initAptClientAutocomplete() {
                 const prevNotes = getClientAppointmentNotes(client.id);
                 if (prevNotes.length > 0) {
                     const notesHtml = prevNotes.slice(0, 3).map(n =>
-                        `<div style="font-size:.78rem;color:var(--text-dim);padding:4px 8px;background:rgba(0,0,0,0.2);border-radius:4px;border-left:2px solid var(--violet-400);">${n}</div>`
+                        `<div style="font-size:.78rem;color:var(--text-dim);padding:4px 8px;background:rgba(0,0,0,0.2);border-radius:4px;border-left:2px solid var(--violet-400);">${escapeHtml(n)}</div>`
                     ).join('');
                     html += `<div style="margin-top:.6rem;"><div style="font-size:.7rem;text-transform:uppercase;color:var(--text-dim);letter-spacing:.5px;margin-bottom:4px;">📋 Notas anteriores</div>${notesHtml}</div>`;
                 }
@@ -1594,6 +1795,46 @@ function getSlotAvailability({ minute, appointments, blocks, activeEmployees }) 
     };
 }
 
+function appointmentHasEmployeeCollisionOnDate(dateStr, timeStr, duration, employeeId, ignoreId = null) {
+    if (!employeeId) return false;
+    const start = new Date(`${dateStr}T${timeStr}`);
+    const end = new Date(start.getTime() + duration * 60000);
+    return db.appointments.some(a => {
+        if (ignoreId && String(a.id) === String(ignoreId)) return false;
+        if (String(getAppointmentEmployeeId(a) || '') !== String(employeeId || '') || getAppointmentDate(a) !== dateStr) return false;
+        const aStart = new Date(`${getAppointmentDate(a)}T${getAppointmentTime(a)}`);
+        const aEnd = new Date(aStart.getTime() + getAppointmentDuration(a) * 60000);
+        return start < aEnd && end > aStart;
+    });
+}
+
+function getRecurringAppointmentWarnings(repeatDates, timeStr, duration, employeeId, ignoreId = null) {
+    const startMinutes = timeToMinutes(timeStr);
+    const endMinutes = startMinutes === null ? null : startMinutes + duration;
+    const blockedDates = [];
+    const closedDates = [];
+    const collisionDates = [];
+
+    repeatDates.slice(1).forEach(dateStr => {
+        if (getBusinessHoursForDate(dateStr).closed) closedDates.push(dateStr);
+        if (startMinutes !== null && endMinutes !== null && appointmentOverlapsBlockedSlot(dateStr, startMinutes, endMinutes, employeeId)) {
+            blockedDates.push(dateStr);
+        }
+        if (appointmentHasEmployeeCollisionOnDate(dateStr, timeStr, duration, employeeId, ignoreId)) {
+            collisionDates.push(dateStr);
+        }
+    });
+
+    const invalidDates = new Set([...closedDates, ...blockedDates, ...collisionDates]);
+    return {
+        closedDates,
+        blockedDates,
+        collisionDates,
+        validDates: repeatDates.filter((dateStr, idx) => idx === 0 || !invalidDates.has(dateStr)),
+        hasWarnings: invalidDates.size > 0
+    };
+}
+
 function appointmentOverlapsBlockedSlot(dateStr, startMinutes, endMinutes, employeeId) {
     const cfg = getBusinessConfig();
     return (cfg.blockedSlots || []).some(block => {
@@ -1610,7 +1851,11 @@ function appointmentOverlapsBlockedSlot(dateStr, startMinutes, endMinutes, emplo
 function shouldSaveAppointmentLocally(error) {
     if (!window.supabaseClient) return true;
     const text = String(error?.message || error?.name || '').toLowerCase();
-    return text.includes('failed to fetch') || text.includes('network') || text.includes('timeout');
+    return text.includes('failed to fetch') ||
+        text.includes('network') ||
+        text.includes('timeout') ||
+        text.includes('appointments_client_id_fkey') ||
+        text.includes('violates foreign key constraint');
 }
 
 function buildLocalAppointmentRow(row, forcedId = null) {
@@ -1696,11 +1941,10 @@ async function saveAppointment() {
         ? appointmentOverlapsBlockedSlot(dateInput, startMinutes, endMinutes, aptEmployeeId)
         : false;
 
-    // Crear clienta si no existe
-    if (!aptCurrentClient) {
-        showToast('Creando clienta...', 'info');
-        aptCurrentClient = await createClient(nameInput);
-        if (!aptCurrentClient) return;
+    const appointmentClient = await resolveAppointmentClient(nameInput);
+    if (!appointmentClient) {
+        showToast('No se pudo preparar la clienta para la cita.', 'error');
+        return;
     }
 
     // 3. Validaciones de día cerrado y colisión
@@ -1711,8 +1955,8 @@ async function saveAppointment() {
     const closedMsg = isClosed ? "El salón está configurado como CERRADO para este día." : "";
 
     const aptData = withCurrentUser({
-        client_id: aptCurrentClient.id,
-        client_name: aptCurrentClient.name,
+        client_id: appointmentClient.id,
+        client_name: appointmentClient.name,
         apt_date: dateInput,
         apt_time: timeInput,
         service: serviceVal,
@@ -1722,7 +1966,28 @@ async function saveAppointment() {
         notes: document.getElementById('apt-notes').value,
         employee_id: aptEmployeeId
     });
-    const repeatDates = getAppointmentRepeatDates(dateInput);
+    let repeatDates = getAppointmentRepeatDates(dateInput);
+    if (repeatDates.length > 1) {
+        const recurringWarnings = getRecurringAppointmentWarnings(repeatDates, timeInput, duration, aptEmployeeId, editingAppointmentId);
+        if (recurringWarnings.hasWarnings) {
+            const parts = [];
+            if (recurringWarnings.closedDates.length) parts.push(`Local cerrado: ${recurringWarnings.closedDates.join(', ')}`);
+            if (recurringWarnings.blockedDates.length) parts.push(`Bloqueos de agenda: ${recurringWarnings.blockedDates.join(', ')}`);
+            if (recurringWarnings.collisionDates.length) parts.push(`Solapamientos: ${recurringWarnings.collisionDates.join(', ')}`);
+            const ok = await showCustomConfirm(
+                `La recurrencia tiene fechas que no conviene agendar.\n\n${parts.join('\n')}\n\nSe omitiran esas fechas y se guardaran ${recurringWarnings.validDates.length} cita(s).`,
+                { title: 'Revisar recurrencia', confirmText: 'Omitir y agendar', cancelText: 'Volver' }
+            );
+            if (!ok) return;
+            repeatDates = recurringWarnings.validDates;
+            addBusinessAlert({
+                type: 'recurrence',
+                level: 'warning',
+                title: 'Fechas omitidas en cita recurrente',
+                message: `${appointmentClient.name}: ${parts.join(' | ')}`
+            });
+        }
+    }
 
     if (hasCollision || isClosed || hasBlockedSlot) {
         const warningModal = document.getElementById('modal-appointment-warning');
@@ -1969,7 +2234,7 @@ function renderAgendaSidePanel(dateStr) {
                         <span style="color:var(--text-dim);font-size:.75rem;">${a.service || 'Servicio s/e'} ${emp ? '· ' + emp.name : ''}</span>
                     </div>
                     <div style="display:flex;gap:6px;align-items:center;">
-                        <button class="btn-cobrar-chip" onclick="chargeAppointment('${a.id}')" title="Cobrar"><i data-lucide="shopping-cart"></i> Cobrar</button>
+                        <button class="btn-cobrar-chip" onclick="event.stopPropagation(); chargeAppointment('${a.id}')" title="Cobrar"><i data-lucide="shopping-cart"></i> Cobrar</button>
                         <button class="btn-icon apt-edit-btn" data-apt-id="${a.id}" title="Editar"><i data-lucide="pencil" style="width:14px;height:14px;color:var(--violet-300);"></i></button>
                         <button class="btn-icon apt-del-btn" data-apt-id="${a.id}" title="Eliminar"><i data-lucide="trash-2" style="width:14px;height:14px;color:var(--danger);"></i></button>
                     </div>
@@ -2481,9 +2746,11 @@ function initPOS() {
             splitToggleRow.classList.add('hidden');
             splitSection.classList.add('hidden');
             splitCheckbox.checked = false;
+            setDepositEntryMode(true);
         } else {
             señaMethodRow.classList.add('hidden');
             splitToggleRow.classList.remove('hidden');
+            setDepositEntryMode(false);
         }
         // Auto-sincronizar método de propina con el del servicio
         const tipMethodSel = document.getElementById('tip-method');
@@ -2518,19 +2785,13 @@ function initPOS() {
 
     const serviceSelect = document.getElementById('service');
     // Escuchar cambios de servicio para autocompletar precio si es fijo
-    serviceSelect.addEventListener('change', (e) => {
-        const srvId = e.target.value;
-        const srv = db.services.find(s => s.id == srvId);
-        if (srv && srv.priceType === 'fijo') {
-            document.getElementById('amount').value = (parseFloat(srv.price) || 0) + getPosProductTotal();
-        } else {
-            document.getElementById('amount').value = '';
-        }
-        // Duración solo informativa — no mostrar toast al registrar cobro
-    });
+    serviceSelect.addEventListener('change', addPosServiceFromSelect);
 
     const addProductBtn = document.getElementById('btn-add-product-to-sale');
     if (addProductBtn) addProductBtn.addEventListener('click', addProductToSale);
+
+    const depositBtn = document.getElementById('btn-start-deposit');
+    if (depositBtn) depositBtn.addEventListener('click', () => startDepositEntry());
 
     initPOSClientAutocomplete();
     document.getElementById('btn-save-transaction').addEventListener('click', saveTransaction);
@@ -2558,6 +2819,7 @@ function initPOS() {
     });
 
     updateFormSelects();
+    renderPosServiceSelection();
     renderPosProducts();
     updateStats();
 }
@@ -2570,7 +2832,7 @@ function updateFormSelects() {
 
     // POS — select de servicio (guarda el ID)
     if (serviceSelect) {
-        serviceSelect.innerHTML = '<option value="" disabled selected style="display:none">Seleccione servicio...</option>';
+        serviceSelect.innerHTML = '<option value="" disabled selected style="display:none">Agregar servicio...</option>';
         db.services.forEach(s => {
             const opt = document.createElement('option');
             opt.value = s.id;
@@ -2598,11 +2860,19 @@ function updateFormSelects() {
         db.products.forEach(p => {
             const opt = document.createElement('option');
             opt.value = p.id;
-            opt.textContent = `${p.name} ($${fmt(getProductPrice(p))})`;
+            const stockLabel = hasControlledStock(p) ? ` - Stock: ${p.stock}` : '';
+            opt.textContent = `${p.name} ($${fmt(getProductPrice(p))})${stockLabel}`;
             productSelect.appendChild(opt);
         });
         if (prevProduct && db.products.some(p => String(p.id) === String(prevProduct))) {
             productSelect.value = prevProduct;
+        }
+        if (!productSelect.dataset.stockBound) {
+            productSelect.dataset.stockBound = '1';
+            productSelect.addEventListener('change', () => {
+                const product = db.products.find(p => String(p.id) === String(productSelect.value));
+                if (product && hasControlledStock(product) && (parseFloat(product.stock) || 0) <= 0) notifyLowStock(product, 0);
+            });
         }
     }
 
@@ -2668,7 +2938,7 @@ function initPOSClientAutocomplete() {
             matches.forEach(client => {
                 const div = document.createElement('div');
                 div.className = 'autocomplete-item';
-                div.innerHTML = `<span class="ac-name">${client.name}</span><span class="ac-phone">Saldo: $${client.balance||0} / Debe: $${client.debt||0}</span>`;
+                div.innerHTML = `<span class="ac-name">${escapeHtml(client.name)}</span><span class="ac-phone">Saldo: $${fmt(client.balance||0)} / Debe: $${fmt(client.debt||0)}</span>`;
                 div.addEventListener('click', () => selectClient(client));
                 dropdown.appendChild(div);
             });
@@ -2678,7 +2948,7 @@ function initPOSClientAutocomplete() {
         const createDiv = document.createElement('div');
         createDiv.className = 'autocomplete-item';
         createDiv.style.cssText = 'color:var(--violet-200);border-top:1px solid var(--border-subtle);';
-        createDiv.innerHTML = `<span class="ac-name" style="color:var(--violet-300);">+ Crear nueva clienta "${e.target.value}"</span>`;
+        createDiv.innerHTML = `<span class="ac-name" style="color:var(--violet-300);">+ Crear nueva clienta "${escapeHtml(e.target.value)}"</span>`;
         createDiv.addEventListener('click', () => {
             dropdown.style.display = 'none';
             openQuickClientModal(e.target.value, selectClient);
@@ -2848,6 +3118,265 @@ function clearClientSelection() {
     window._chargeAppointmentId = null;
 }
 
+/* Legacy POS service rendering kept out of runtime; variable-price logic is below.
+function getSelectedPosServices() {
+    return posSelectedServices
+        .map(ref => {
+            const service = db.services.find(s => String(s.id) === String(ref.id));
+            return service || ref;
+        })
+        .filter(Boolean);
+}
+
+function getPosServicesTotal() {
+    return getSelectedPosServices().reduce((sum, service) => {
+        const fixed = service.priceType === 'fijo' || service.price_type === 'fijo';
+        return sum + (fixed ? (parseFloat(service.price) || 0) : 0);
+    }, 0);
+}
+
+function renderPosServiceSelection() {
+    const list = document.getElementById('pos-selected-services');
+    if (!list) return;
+    const selected = getSelectedPosServices();
+    if (selected.length === 0) {
+        list.innerHTML = '<span style="color:var(--text-dim);font-size:0.82rem">Sin servicios agregados.</span>';
+    } else {
+        list.innerHTML = selected.map(service => {
+            const price = parseFloat(service.price) || 0;
+            const priceLabel = price ? ` · $${fmt(price)}` : '';
+            return `
+                <div class="apt-service-chip">
+                    <span>${service.name || 'Servicio'}${priceLabel}</span>
+                    <button type="button" class="btn-icon btn-remove-pos-service" data-id="${service.id || service.name}"><i data-lucide="x"></i></button>
+                </div>
+            `;
+        }).join('');
+    }
+    list.querySelectorAll('.btn-remove-pos-service').forEach(btn => {
+        btn.onclick = () => {
+            posSelectedServices = posSelectedServices.filter(service => String(service.id || service.name) !== String(btn.dataset.id));
+            renderPosServiceSelection();
+            syncSaleAmountFromFixedService();
+        };
+    });
+    refreshIcons();
+}
+
+function addPosServiceFromSelect() {
+    const select = document.getElementById('service');
+    const serviceId = select?.value;
+    const service = db.services.find(s => String(s.id) === String(serviceId));
+    if (!service) return;
+
+    if (!posSelectedServices.some(s => String(s.id) === String(service.id))) {
+        posSelectedServices.push({
+            id: service.id,
+            name: service.name,
+            price: service.price,
+            priceType: service.priceType || service.price_type || 'variable'
+        });
+    }
+    if (select) select.value = '';
+    syncCustomSelect('service');
+    renderPosServiceSelection();
+    syncSaleAmountFromFixedService();
+}
+*/
+
+function normalizePriceType(service) {
+    return String(service?.priceType || service?.price_type || '').toLowerCase().trim();
+}
+
+function isFixedPriceService(service) {
+    return normalizePriceType(service) === 'fijo';
+}
+
+function getPosServiceKey(service) {
+    return String(service?.id || service?.name || '');
+}
+
+function findSelectedPosServiceRef(key) {
+    return posSelectedServices.find(service => getPosServiceKey(service) === String(key));
+}
+
+function focusVariableServicePrice(key = null) {
+    const selector = key ? `.pos-service-price[data-id="${window.CSS?.escape ? CSS.escape(String(key)) : String(key).replace(/"/g, '\\"')}"]` : '.pos-service-price';
+    const input = document.querySelector(selector);
+    if (input) {
+        input.focus();
+        input.select?.();
+    }
+}
+
+function getSelectedPosServices() {
+    return posSelectedServices
+        .map(ref => {
+            const service = db.services.find(s => String(s.id) === String(ref.id));
+            return service ? { ...service, salePrice: ref.salePrice, priceType: ref.priceType || service.priceType || service.price_type } : ref;
+        })
+        .filter(Boolean);
+}
+
+function getPosServiceSalePrice(service) {
+    const explicit = parseFloat(service?.salePrice);
+    if (!Number.isNaN(explicit) && explicit > 0) return explicit;
+    return isFixedPriceService(service) ? (parseFloat(service?.price) || 0) : 0;
+}
+
+function getPosServicesTotal() {
+    return getSelectedPosServices().reduce((sum, service) => sum + getPosServiceSalePrice(service), 0);
+}
+
+function refreshPosServicesBreakdown() {
+    const breakdownPanel = document.getElementById('pos-services-breakdown');
+    const breakdownList = document.getElementById('pos-services-breakdown-list');
+    const breakdownTotal = document.getElementById('pos-services-breakdown-total');
+    if (!breakdownPanel || !breakdownList || breakdownPanel.classList.contains('hidden')) return;
+    const selected = getSelectedPosServices();
+    breakdownList.innerHTML = selected.map(service => `
+        <div style="display:flex; justify-content:space-between; padding:3px 0; color:var(--text-primary);">
+            <span style="font-weight:500;">${escapeHtml(service.name || 'Servicio')}</span>
+            <span style="font-weight:700; color:var(--success);">$${fmt(getPosServiceSalePrice(service))}</span>
+        </div>
+    `).join('');
+    if (breakdownTotal) breakdownTotal.textContent = `$${fmt(getPosServicesTotal())}`;
+}
+
+function renderPosServiceSelection() {
+    const list = document.getElementById('pos-selected-services');
+    if (!list) return;
+    const selected = getSelectedPosServices();
+    if (selected.length === 0) {
+        list.innerHTML = '<span style="color:var(--text-dim);font-size:0.82rem">Sin servicios agregados.</span>';
+    } else {
+        list.innerHTML = selected.map(service => {
+            const price = getPosServiceSalePrice(service);
+            const needsManualPrice = !isFixedPriceService(service);
+            const fixedPriceLabel = price ? ` - $${fmt(price)}` : '';
+            const serviceKey = getPosServiceKey(service);
+            const safeServiceKey = escapeHtml(serviceKey);
+            const safeServiceName = escapeHtml(service.name || 'Servicio');
+            return `
+                <div class="apt-service-chip">
+                    <span>${safeServiceName}${needsManualPrice ? '' : fixedPriceLabel}</span>
+                    ${needsManualPrice ? `<label class="pos-variable-price-wrap"><span>Precio</span><input class="pos-service-price" type="number" min="1" step="1" inputmode="decimal" value="${price || ''}" placeholder="0" data-id="${safeServiceKey}" aria-label="Precio de ${safeServiceName}" onwheel="this.blur()"></label>` : ''}
+                    <button type="button" class="btn-icon btn-remove-pos-service" data-id="${safeServiceKey}"><i data-lucide="x"></i></button>
+                </div>
+            `;
+        }).join('');
+    }
+    list.querySelectorAll('.pos-service-price').forEach(input => {
+        const updatePrice = () => {
+            const item = findSelectedPosServiceRef(input.dataset.id);
+            if (item) item.salePrice = input.value;
+            syncSaleAmountFromFixedService();
+        };
+        input.oninput = updatePrice;
+        input.onchange = updatePrice;
+    });
+    list.querySelectorAll('.btn-remove-pos-service').forEach(btn => {
+        btn.onclick = () => {
+            posSelectedServices = posSelectedServices.filter(service => getPosServiceKey(service) !== String(btn.dataset.id));
+            renderPosServiceSelection();
+            syncSaleAmountFromFixedService();
+        };
+    });
+    refreshPosServicesBreakdown();
+    refreshIcons();
+}
+
+function addPosServiceFromSelect() {
+    const select = document.getElementById('service');
+    const serviceId = select?.value;
+    const service = db.services.find(s => String(s.id) === String(serviceId));
+    if (!service) return;
+
+    if (!posSelectedServices.some(s => String(s.id) === String(service.id))) {
+        const fixed = isFixedPriceService(service);
+        posSelectedServices.push({
+            id: service.id,
+            name: service.name,
+            price: fixed ? service.price : null,
+            salePrice: fixed ? (parseFloat(service.price) || 0) : '',
+            priceType: service.priceType || service.price_type || 'variable'
+        });
+    }
+    if (select) select.value = '';
+    syncCustomSelect('service');
+    renderPosServiceSelection();
+    syncSaleAmountFromFixedService();
+    if (!isFixedPriceService(service)) focusVariableServicePrice(service.id);
+}
+
+function resetPosServices() {
+    posSelectedServices = [];
+    const select = document.getElementById('service');
+    if (select) select.value = '';
+    renderPosServiceSelection();
+    syncCustomSelect('service');
+}
+
+function setDepositEntryMode(enabled) {
+    const method = document.getElementById('payment-method');
+    const serviceSelect = document.getElementById('service');
+    const saleProductsSection = document.getElementById('sale-products-section');
+    const partialSection = document.getElementById('partial-payment-section');
+    const tipSection = document.getElementById('tip-section');
+    const splitToggleRow = document.getElementById('split-toggle-row');
+    const breakdownPanel = document.getElementById('pos-services-breakdown');
+    const discountAlert = document.getElementById('discount-alert');
+
+    if (enabled) {
+        resetPosServices();
+        resetPosProducts();
+        if (serviceSelect) serviceSelect.value = '';
+        const applyDiscount = document.getElementById('apply-discount');
+        if (applyDiscount) applyDiscount.checked = false;
+        const partialCheckbox = document.getElementById('is-partial-payment');
+        if (partialCheckbox) partialCheckbox.checked = false;
+        const tipCheckbox = document.getElementById('is-tip');
+        if (tipCheckbox) tipCheckbox.checked = false;
+        if (discountAlert) discountAlert.classList.add('hidden');
+        if (saleProductsSection) saleProductsSection.classList.add('hidden');
+        if (partialSection) partialSection.classList.add('hidden');
+        if (tipSection) tipSection.classList.add('hidden');
+        if (splitToggleRow) splitToggleRow.classList.add('hidden');
+        if (breakdownPanel) breakdownPanel.classList.add('hidden');
+    } else {
+        if (saleProductsSection) saleProductsSection.classList.remove('hidden');
+        if (partialSection) partialSection.classList.remove('hidden');
+        if (tipSection) tipSection.classList.remove('hidden');
+        if (splitToggleRow) splitToggleRow.classList.remove('hidden');
+    }
+    if (method) syncCustomSelect('payment-method');
+}
+
+function startDepositEntry(client = null) {
+    if (typeof window.navigateTo === 'function') window.navigateTo('caja');
+    window._chargeDetail = null;
+    window._chargeBaseAmount = null;
+    window._chargeAppointmentId = null;
+    const toggle = document.getElementById('transaction-type-toggle');
+    if (toggle && !toggle.checked) {
+        toggle.checked = true;
+        toggle.dispatchEvent(new Event('change'));
+    }
+    if (client) {
+        currentClient = client;
+        const input = document.getElementById('client-name');
+        if (input) input.value = client.name || '';
+    }
+    const method = document.getElementById('payment-method');
+    if (method) {
+        method.value = 'seña';
+        method.dispatchEvent(new Event('change'));
+        syncCustomSelect('payment-method');
+    }
+    document.getElementById('amount')?.focus();
+    showToast('Modo seña listo: elegí la clienta y el monto.', 'info');
+}
+
 function getPosProductTotal() {
     return posSelectedProducts.reduce((sum, item) => sum + (getProductPrice(item) * (parseFloat(item.qty) || 1)), 0);
 }
@@ -2859,8 +3388,18 @@ function syncSaleAmountFromFixedService() {
     // Si venimos de chargeAppointment con multiples servicios, usamos su monto base total
     if (window._chargeBaseAmount !== undefined && window._chargeBaseAmount !== null) {
         if (amountInput) {
-            amountInput.value = window._chargeBaseAmount + getPosProductTotal();
+            const selectedServicesTotal = getPosServicesTotal();
+            const baseAmount = selectedServicesTotal > 0 ? selectedServicesTotal : window._chargeBaseAmount;
+            amountInput.value = baseAmount + getPosProductTotal();
+            refreshPosServicesBreakdown();
         }
+        return;
+    }
+
+    const selectedTotal = getPosServicesTotal();
+    if (amountInput && selectedTotal > 0) {
+        amountInput.value = selectedTotal + getPosProductTotal();
+        refreshPosServicesBreakdown();
         return;
     }
 
@@ -2883,7 +3422,7 @@ function renderPosProducts() {
             const total = getProductPrice(item) * qty;
             return `
                 <div class="sale-product-row">
-                    <span>${item.name} x${qty}</span>
+                    <span>${escapeHtml(item.name || 'Producto')} x${qty}</span>
                     <strong>$${fmt(total)}</strong>
                     <button type="button" class="btn-icon btn-remove-sale-product" data-id="${item.id}"><i data-lucide="x"></i></button>
                 </div>
@@ -2903,6 +3442,24 @@ function renderPosProducts() {
     refreshIcons();
 }
 
+function hasControlledStock(product) {
+    return product && product.stock !== null && product.stock !== undefined && product.stock !== '';
+}
+
+function getSelectedProductQty(productId) {
+    const item = posSelectedProducts.find(p => String(p.id) === String(productId));
+    return item ? (parseFloat(item.qty) || 0) : 0;
+}
+
+function notifyLowStock(product, remaining) {
+    if (!hasControlledStock(product)) return;
+    if (remaining <= 0) {
+        showToast(`Sin stock de ${product.name}.`, 'error');
+    } else if ([1, 2, 3].includes(remaining)) {
+        showToast(`Quedan ${remaining} unidad${remaining === 1 ? '' : 'es'} de ${product.name}.`, remaining === 1 ? 'error' : 'warning');
+    }
+}
+
 function addProductToSale() {
     const select = document.getElementById('pos-product-select');
     const qtyInput = document.getElementById('pos-product-qty');
@@ -2911,10 +3468,20 @@ function addProductToSale() {
     const product = db.products.find(p => String(p.id) === String(productId));
     if (!product) return showToast('Seleccione un producto.', 'error');
     if (qty <= 0) return showToast('Ingrese una cantidad valida.', 'error');
+    if (hasControlledStock(product)) {
+        const stock = parseFloat(product.stock) || 0;
+        const alreadySelected = getSelectedProductQty(product.id);
+        if (stock <= 0) return notifyLowStock(product, 0);
+        if (alreadySelected + qty > stock) {
+            showToast(`No hay stock suficiente de ${product.name}. Disponible: ${stock - alreadySelected}.`, 'error');
+            return;
+        }
+    }
 
     const existing = posSelectedProducts.find(item => String(item.id) === String(product.id));
     if (existing) existing.qty = (parseFloat(existing.qty) || 0) + qty;
     else posSelectedProducts.push({ id: product.id, name: product.name, price: getProductPrice(product), qty });
+    if (hasControlledStock(product)) notifyLowStock(product, (parseFloat(product.stock) || 0) - getSelectedProductQty(product.id));
 
     if (select) select.value = '';
     if (qtyInput) qtyInput.value = '1';
@@ -2952,16 +3519,18 @@ async function saveTransaction() {
     };
 
     if (isIncome) {
+        transactionSchema.method = document.getElementById('payment-method').value;
+        const isDepositEntry = transactionSchema.method === 'seña';
         const employeeSelect = document.getElementById('employee');
         const selectedEmployeeId = employeeSelect?.value || '';
         const selectedEmployee = db.employees.find(e => String(e.id) === String(selectedEmployeeId));
-        if (!selectedEmployee) {
+        if (!selectedEmployee && !isDepositEntry) {
             showToast('Seleccione el staff que realizó el servicio.', 'error');
             document.getElementById('btn-save-transaction').disabled = false;
             return;
         }
-        transactionSchema.employee = selectedEmployee.name;
-        transactionSchema.employee_id = selectedEmployee.id;
+        transactionSchema.employee = selectedEmployee ? selectedEmployee.name : '';
+        transactionSchema.employee_id = selectedEmployee ? selectedEmployee.id : null;
 
         const clientInput = document.getElementById('client-name').value.trim();
         if (!currentClient && !clientInput) {
@@ -2969,19 +3538,43 @@ async function saveTransaction() {
             document.getElementById('btn-save-transaction').disabled = false;
             return;
         }
+        if (currentClient) currentClient = await ensureClientExistsForRemoteSave(currentClient, clientInput);
         transactionSchema.client_name = currentClient ? currentClient.name : clientInput;
         transactionSchema.client_id = currentClient ? currentClient.id : null;
         const srvId = document.getElementById('service').value;
         const srv = db.services.find(s => s.id == srvId); // == for types
+        const selectedServices = getSelectedPosServices();
+        const missingVariablePrice = selectedServices.find(service => !isFixedPriceService(service) && getPosServiceSalePrice(service) <= 0);
+        if (!isDepositEntry && missingVariablePrice) {
+            showToast(`Ingrese el precio de "${missingVariablePrice.name}".`, 'error');
+            focusVariableServicePrice(getPosServiceKey(missingVariablePrice));
+            document.getElementById('btn-save-transaction').disabled = false;
+            return;
+        }
         // Si viene de chargeAppointment con múltiples servicios, usar el detalle completo
         if (window._chargeDetail) {
-            transactionSchema.detail = window._chargeDetail;
+            transactionSchema.detail = selectedServices.length ? selectedServices.map(service => service.name).join(' + ') : window._chargeDetail;
+            if (selectedServices.length) {
+                transactionSchema.services = selectedServices.map(service => ({
+                    id: service.id || null,
+                    name: service.name,
+                    price: getPosServiceSalePrice(service) || null
+                }));
+            }
             window._chargeDetail = null; // limpiar después de usar
             window._chargeBaseAmount = null;
+        } else if (isDepositEntry) {
+            transactionSchema.detail = 'Seña / Depósito';
+        } else if (selectedServices.length > 0) {
+            transactionSchema.detail = selectedServices.map(service => service.name).join(' + ');
+            transactionSchema.services = selectedServices.map(service => ({
+                id: service.id || null,
+                name: service.name,
+                price: getPosServiceSalePrice(service) || null
+            }));
         } else {
             transactionSchema.detail = srv ? srv.name : 'Servicio';
         }
-        transactionSchema.method = document.getElementById('payment-method').value;
         const soldProducts = posSelectedProducts.map(item => ({
             id: item.id,
             name: item.name,
@@ -3003,7 +3596,9 @@ async function saveTransaction() {
         
         if (!currentClient && clientInput) {
             currentClient = await createClient(clientInput);
+            currentClient = await ensureClientExistsForRemoteSave(currentClient, clientInput);
             transactionSchema.client_id = currentClient.id;
+            transactionSchema.client_name = currentClient.name || clientInput;
         }
 
         const applyDiscount = document.getElementById('apply-discount').checked;
@@ -3018,7 +3613,9 @@ async function saveTransaction() {
                 transactionSchema.amount = amount - cb; 
                 transactionSchema.detail += ` (Desc. de seña: -${cb})`;
             }
-            await window.supabaseClient.from('clients').update({balance: currentClient.balance}).eq('id', currentClient.id);
+            if (window.supabaseClient && !isLocalRecordId(currentClient.id)) {
+                await updateClientSafe(currentClient.id, { balance: currentClient.balance });
+            }
         }
 
         const isPartial = document.getElementById('is-partial-payment').checked;
@@ -3036,7 +3633,9 @@ async function saveTransaction() {
             }
             if (currentClient) {
                 currentClient.debt = (parseFloat(currentClient.debt) || 0) + debtAmount;
-                await window.supabaseClient.from('clients').update({debt: currentClient.debt}).eq('id', currentClient.id);
+                if (window.supabaseClient && !isLocalRecordId(currentClient.id)) {
+                    await updateClientSafe(currentClient.id, { debt: currentClient.debt });
+                }
                 // Log de deuda
                 const fmt2 = n => Number(n).toLocaleString('es-UY');
                 addClientLog(currentClient.id, `⚠ DEUDA GENERADA: $${fmt2(debtAmount)}`);
@@ -3053,9 +3652,12 @@ async function saveTransaction() {
             transactionSchema.method = 'seña'; // sigue siendo seña para el balance
             if (currentClient) {
                 currentClient.balance = (parseFloat(currentClient.balance) || 0) + transactionSchema.amount;
-                await window.supabaseClient.from('clients').update({balance: currentClient.balance}).eq('id', currentClient.id);
+                if (window.supabaseClient && !isLocalRecordId(currentClient.id)) {
+                    await updateClientSafe(currentClient.id, { balance: currentClient.balance });
+                }
             }
         }
+        if (currentClient) persistCollectionLocal('clients', db.clients);
         
     } else {
         transactionSchema.detail = document.getElementById('expense-detail').value;
@@ -3149,6 +3751,7 @@ async function saveTransaction() {
                 method: t.method || originalTx.method || 'efectivo', 
                 employee: t.employee || originalTx.employee || '',
                 employeeId: t.employee_id || originalTx.employee_id || null,
+                services: normalizeAppointmentServices(t.services || originalTx.services),
                 products: normalizeTransactionProducts(t.products || originalTx.products),
                 productTotal: parseFloat(t.product_total || originalTx.product_total) || 0
             });
@@ -3184,6 +3787,13 @@ async function saveTransaction() {
                 document.getElementById('split-toggle-row').classList.remove('hidden');
                 
                 resetPosProducts();
+                resetPosServices();
+                const paymentMethodEl = document.getElementById('payment-method');
+                if (paymentMethodEl) {
+                    paymentMethodEl.value = 'efectivo';
+                    paymentMethodEl.dispatchEvent(new Event('change'));
+                    syncCustomSelect('payment-method');
+                }
                 window._chargeDetail = null;
                 window._chargeBaseAmount = null;
                 window._chargeAppointmentId = null;
@@ -4101,6 +4711,11 @@ function initCRM() {
     photoInput.addEventListener('change', async (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
+        if (!/^image\/(png|jpe?g|webp|gif)$/i.test(file.type || '')) {
+            showToast('Formato de imagen no permitido.', 'error');
+            photoInput.value = '';
+            return;
+        }
         if (file.size > 5 * 1024 * 1024) { 
             showToast('La imagen excede 5MB', 'error'); 
             photoInput.value = ''; 
@@ -4155,6 +4770,10 @@ function initCRM() {
 
 async function uploadClientFile(clientId, file) {
     if (file.size > 10 * 1024 * 1024) { showToast('El archivo excede 10MB', 'error'); return; }
+    if (!/^image\/(png|jpe?g|webp|gif)$|^application\/pdf$/i.test(file.type || '')) {
+        showToast('Formato no permitido. Usá imagen o PDF.', 'error');
+        return;
+    }
     showToast('Subiendo archivo...', 'info');
     const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
     const filePath = `work_files/${clientId}/${Date.now()}.${ext}`;
@@ -4339,6 +4958,16 @@ function openClientModal(clientId = null) {
     const delBtn = document.getElementById('btn-delete-client');
     if (delBtn) {
         if (clientId) { delBtn.classList.remove('hidden'); } else { delBtn.classList.add('hidden'); }
+    }
+    const depositBtn = document.getElementById('btn-client-add-deposit');
+    if (depositBtn) {
+        depositBtn.classList.toggle('hidden', !clientId);
+        depositBtn.onclick = () => {
+            const client = db.clients.find(c => String(c.id) === String(clientId));
+            if (!client) return;
+            closeClientModal();
+            startDepositEntry(client);
+        };
     }
 
     if (clientId) {
@@ -5058,14 +5687,14 @@ function initSettings() {
         if (productForm) productForm.addEventListener('submit', (e) => { e.preventDefault(); saveProduct(); });
 
         // Cargar clave IA guardada
-        const savedKey = localStorage.getItem('violet_ai_key');
+        const savedKey = getAIKey();
         if (savedKey) document.getElementById('ai-api-key-input').value = savedKey;
 
         document.getElementById('btn-save-api-key').addEventListener('click', () => {
             const key = document.getElementById('ai-api-key-input').value.trim();
             if (!key) { showToast('Ingresá una clave válida', 'error'); return; }
-            localStorage.setItem('violet_ai_key', key);
-            showToast('Clave API guardada correctamente');
+            setAIKey(key);
+            showToast('Clave API disponible solo en esta sesion.');
         });
     }
 
@@ -5651,10 +6280,12 @@ async function updateProductStock(productId, qtyChange) {
 
     const newStock = Math.max(0, (parseFloat(product.stock) || 0) + qtyChange);
     product.stock = newStock;
+    notifyLowStock(product, newStock);
     
     // Persistencia local
     persistCollectionLocal('products', db.products);
     renderProductsList();
+    if (currentView === 'dashboard' && typeof renderDashboardAlerts === 'function') renderDashboardAlerts();
 
     // Persistencia remota
     try {
@@ -6207,13 +6838,19 @@ function renderStaffBlockedList() {
         const dateText = slot.date || slot.blockDate || 'Sin fecha';
         const timeText = [slot.start || slot.startTime || slot.start_time, slot.end || slot.endTime || slot.end_time].filter(Boolean).join(' - ') || 'Sin horario';
         const reason = slot.reason ? ` | ${slot.reason}` : '';
-        return `<li class="task-item"><span class="task-text"><i data-lucide="calendar-x" style="width:14px;height:14px;margin-right:5px;vertical-align:-2px"></i>${staffName}: ${dateText} ${timeText}${reason}</span></li>`;
+        return `<li class="task-item"><span class="task-text"><i data-lucide="calendar-x" style="width:14px;height:14px;margin-right:5px;vertical-align:-2px"></i>${escapeHtml(staffName)}: ${escapeHtml(dateText)} ${escapeHtml(timeText)}${escapeHtml(reason)}</span></li>`;
     }).join('');
 }
 
 // ==========================================
 // 11. UTILIDADES
 // ==========================================
+function csvCell(value) {
+    let text = String(value ?? '').replace(/"/g, '""');
+    if (/^[=+\-@]/.test(text.trim())) text = `'${text}`;
+    return `"${text}"`;
+}
+
 // ==========================================
 // 12. ALERTAS DE CUMPLEAÑOS AL INICIAR
 // ==========================================
@@ -6281,10 +6918,10 @@ function exportClientesCSV() {
     if (db.clients.length === 0) { showToast('No hay clientas para exportar', 'error'); return; }
     const headers = ['Nombre', 'Telefono', 'Instagram', 'Cumpleanos'];
     const rows = db.clients.map(c => [
-        `"${(c.name || '').replace(/"/g, '')}"`,
-        `"${(c.phone || '').replace(/\D/g, '')}"`,
-        `"${(c.instagram || '').replace('@','')}"`,
-        `"${c.birthday || ''}"`
+        csvCell(c.name || ''),
+        csvCell((c.phone || '').replace(/\D/g, '')),
+        csvCell((c.instagram || '').replace('@','')),
+        csvCell(c.birthday || '')
     ]);
     const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -6322,10 +6959,10 @@ function exportDailyTransactionsCSV() {
     if (todayTrans.length === 0) { showToast('No hay transacciones hoy', 'error'); return; }
     const headers = ['Fecha', 'Descripcion', 'Metodo', 'Monto'];
     const rows = todayTrans.map(t => [
-        `"${t.date}"`,
-        `"${(t.detail || '').replace(/"/g, '')}"`,
-        `"${t.method}"`,
-        `"${t.amount}"`
+        csvCell(t.date),
+        csvCell(t.detail || ''),
+        csvCell(t.method),
+        csvCell(t.amount)
     ]);
     const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -6371,7 +7008,7 @@ async function sendAIMessage() {
     const msg = input.value.trim();
     if (!msg) return;
 
-    const apiKey = localStorage.getItem('violet_ai_key');
+    const apiKey = getAIKey();
     if (!apiKey) {
         showToast('Primero configurá tu clave API en Configuración → Asistente IA', 'error');
         return;
@@ -6428,8 +7065,9 @@ async function sendAIMessage() {
 function addAIMessage(text, role) {
     const container = document.getElementById('ai-messages');
     const div = document.createElement('div');
-    div.className = `ai-msg ai-msg-${role}`;
-    div.innerHTML = `<span>${text.replace(/\n/g, '<br>')}</span>`;
+    const safeRole = role === 'user' ? 'user' : 'bot';
+    div.className = `ai-msg ai-msg-${safeRole}`;
+    div.innerHTML = `<span>${escapeHtml(text).replace(/\n/g, '<br>')}</span>`;
     container.appendChild(div);
     scrollAIChat();
 }
@@ -6459,15 +7097,15 @@ function showCustomConfirm(message, { title = 'Confirmar', confirmText = 'Acepta
                             <line x1="12" y1="9" x2="12" y2="13"/>
                             <line x1="12" y1="17" x2="12.01" y2="17"/>
                         </svg>
-                        ${title}
+                        ${escapeHtml(title)}
                     </h3>
                 </div>
                 <div class="modal-body" style="padding:1.2rem 1.5rem;">
-                    <p style="margin:0;color:var(--text-secondary);font-size:.92rem;line-height:1.5;white-space:pre-wrap;">${message}</p>
+                    <p style="margin:0;color:var(--text-secondary);font-size:.92rem;line-height:1.5;white-space:pre-wrap;">${escapeHtml(message)}</p>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" id="cc-cancel">${cancelText}</button>
-                    <button type="button" class="btn ${danger ? 'btn-danger' : 'btn-primary'}" id="cc-ok">${confirmText}</button>
+                    <button type="button" class="btn btn-secondary" id="cc-cancel">${escapeHtml(cancelText)}</button>
+                    <button type="button" class="btn ${danger ? 'btn-danger' : 'btn-primary'}" id="cc-ok">${escapeHtml(confirmText)}</button>
                 </div>
             </div>
         `;
@@ -6496,7 +7134,7 @@ function showToast(message, type = 'success') {
         info:    `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--info)" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`
     };
     const icon = icons[type] || icons.info;
-    toast.innerHTML = `${icon} <span style="font-size:0.85rem; font-weight:500;">${message}</span>`;
+    toast.innerHTML = `${icon} <span style="font-size:0.85rem; font-weight:500;">${escapeHtml(message)}</span>`;
     container.appendChild(toast);
     setTimeout(() => {
         toast.style.opacity = '0'; toast.style.transform = 'translateX(20px)'; toast.style.transition = 'all 0.3s';
@@ -6517,6 +7155,12 @@ function chargeAppointment(id) {
 
     // 1. Navegar a POS (Caja)
     if (typeof window.navigateTo === 'function') window.navigateTo('caja');
+    const methodSelect = document.getElementById('payment-method');
+    if (methodSelect && methodSelect.value === 'seña') {
+        methodSelect.value = 'efectivo';
+        methodSelect.dispatchEvent(new Event('change'));
+        syncCustomSelect('payment-method');
+    }
 
     // 2. Llenar cliente
     const clientInput = document.getElementById('client-name');
@@ -6525,6 +7169,7 @@ function chargeAppointment(id) {
         // Buscar el cliente en DB para activar alertas de deuda/seña
         const clientObj = db.clients.find(c => c.id == (apt.clientId || apt.client_id)) || null;
         if (clientObj) {
+            currentClient = clientObj;
             window.currentClient = clientObj;
             const discountAlert = document.getElementById('discount-alert');
             if (discountAlert) {
@@ -6558,11 +7203,11 @@ function chargeAppointment(id) {
             );
             
             if (srv) {
-                const price = parseFloat(srv.price) || 0;
+                const price = isFixedPriceService(srv) ? (parseFloat(srv.price) || 0) : 0;
                 console.log(`[COBRAR] Servicio ${idx + 1} encontrado: "${srv.name}" | Precio: ${price}`);
                 totalAmount += price;
                 if (!firstSrvId) firstSrvId = srv.id;
-                resolvedServices.push({ name: srv.name, price, id: srv.id });
+                resolvedServices.push({ name: srv.name, price, id: srv.id, priceType: srv.priceType || srv.price_type || 'variable' });
             } else {
                 const fallbackPrice = parseFloat(srvRef.price) || 0;
                 console.warn(`[COBRAR] Servicio ${idx + 1} NO encontrado en base de datos: "${srvRef.name}". Usando precio de cita: ${fallbackPrice}`);
@@ -6601,6 +7246,16 @@ function chargeAppointment(id) {
         // Guardar detalle completo para usar en saveTransaction
         window._chargeDetail = resolvedServices.map(s => s.name).join(' + ');
         window._chargeBaseAmount = totalAmount;
+        posSelectedServices = resolvedServices.map(s => ({
+            id: s.id,
+            name: s.name,
+            price: s.price,
+            salePrice: s.price || '',
+            priceType: s.priceType || (s.price ? 'fijo' : 'variable')
+        }));
+        renderPosServiceSelection();
+        const firstVariable = posSelectedServices.find(s => !isFixedPriceService(s));
+        if (firstVariable) setTimeout(() => focusVariableServicePrice(getPosServiceKey(firstVariable)), 0);
         console.log('[COBRAR] Detalle guardado:', window._chargeDetail);
         
         // Monto

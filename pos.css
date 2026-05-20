@@ -277,6 +277,11 @@ body::before {
 .weekly-day { display: flex; align-items: center; gap: .45rem; color: var(--text-secondary); font-size: .86rem; }
 .apt-selected-services { display: flex; flex-direction: column; gap: .45rem; margin-top: .65rem; }
 .apt-service-chip { display: flex; align-items: center; justify-content: space-between; gap: .6rem; padding: .55rem .7rem; background: rgba(201,168,76,.08); border: 1px solid rgba(201,168,76,.22); border-radius: var(--radius-sm); color: var(--text-primary); font-size: .84rem; }
+.pos-variable-price-wrap { display: inline-flex; align-items: center; gap: .4rem; margin-left: auto; color: var(--text-dim); font-size: .74rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.pos-service-price { width: 116px; padding: .5rem .6rem; background: rgba(15,10,24,.82); border: 1px solid var(--gold-400); border-radius: var(--radius-sm); color: var(--text-primary); font: inherit; text-align: right; }
+.pos-service-price:focus { outline: none; border-color: var(--gold-400); }
+.stock-alert-item { border-left: 3px solid var(--warning); }
+.stock-alert-critical { border-left-color: var(--danger); background: var(--danger-bg); }
 .sale-products-controls { display: grid; grid-template-columns: minmax(0, 1fr) 110px auto; gap: .6rem; align-items: center; }
 .sale-products-list { display: flex; flex-direction: column; gap: .45rem; margin-top: .8rem; }
 .sale-product-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: .6rem; align-items: center; padding: .55rem .7rem; background: rgba(0,0,0,.16); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); font-size: .84rem; }
@@ -402,9 +407,13 @@ input:checked + .slider:before { transform: translateX(24px); background-color: 
 .custom-options { position: absolute; display: none; top: 100%; left: 0; right: 0; background: var(--violet-800); border: 1px solid var(--gold-400); border-top: none; border-bottom-left-radius: var(--radius-sm); border-bottom-right-radius: var(--radius-sm); z-index: 500; overflow-y: auto; max-height: 250px; box-shadow: var(--shadow-lg); }
 .custom-select-wrapper.open { z-index: 501; }
 .custom-select-wrapper.open .custom-options { display: block; }
+.custom-option-search { position: sticky; top: 0; z-index: 2; padding: .55rem; background: var(--violet-800); border-bottom: 1px solid rgba(255,255,255,0.08); }
+.custom-option-search input { width: 100%; padding: .62rem .75rem; background: rgba(15,10,24,.72); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); color: var(--text-primary); font: inherit; outline: none; }
+.custom-option-search input:focus { border-color: var(--gold-400); }
 .custom-option { padding: 0.8rem 2.5rem; font-size: 0.9rem; cursor: pointer; transition: background 0.2s; border-bottom: 1px solid rgba(255,255,255,0.05); }
 .custom-option:hover { background: var(--violet-600); color: var(--gold-400); }
 .custom-option.selected { background: rgba(201,168,76,0.15); color: var(--gold-400); font-weight: 600; }
+.custom-option.hidden { display: none; }
 
 /* TIME SELECT — scrollable dropdown for time pickers */
 .time-select-wrapper .custom-options { max-height: 220px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--violet-500) transparent; }

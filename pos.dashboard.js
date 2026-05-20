@@ -10,9 +10,95 @@ function initDashboard() {
         renderDashboardTareas();
         renderDashboardDeudas();
         renderDashboardAgendaResumen();
+        renderDashboardAlerts();
     } catch (e) {
         console.error('[DASHBOARD] Fallo crítico durante inicialización:', e);
     }
+    if (typeof refreshIcons === 'function') refreshIcons();
+}
+
+function dashboardEscape(value) {
+    if (typeof escapeHtml === 'function') return escapeHtml(value);
+    return String(value ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+    }[char]));
+}
+
+function getDashboardAlerts() {
+    const alerts = [];
+    const products = db?.products || [];
+    products.forEach(product => {
+        const controlled = product.stock !== null && product.stock !== undefined && product.stock !== '';
+        if (!controlled) return;
+        const stock = parseFloat(product.stock) || 0;
+        if (stock <= 3) {
+            alerts.push({
+                level: stock <= 0 ? 'critical' : 'warning',
+                title: stock <= 0 ? 'Producto sin stock' : 'Poco stock',
+                message: `${product.name}: ${stock} unidad${stock === 1 ? '' : 'es'}`
+            });
+        }
+    });
+
+    const appointments = db?.appointments || [];
+    const byClientSlot = {};
+    appointments.forEach(apt => {
+        const date = typeof getAppointmentDate === 'function' ? getAppointmentDate(apt) : (apt.date || apt.apt_date || '');
+        const time = typeof getAppointmentTime === 'function' ? getAppointmentTime(apt) : (apt.time || apt.apt_time || '').slice(0, 5);
+        const client = String(apt.clientId || apt.client_id || apt.clientName || apt.client_name || '').toLowerCase();
+        const key = `${date}|${time}|${client}`;
+        if (!byClientSlot[key]) byClientSlot[key] = [];
+        byClientSlot[key].push(apt);
+    });
+    Object.values(byClientSlot).forEach(group => {
+        if (group.length > 2) {
+            const first = group[0];
+            alerts.push({
+                level: 'critical',
+                title: 'Más de 2 turnos iguales',
+                message: `${first.clientName || first.client_name || 'Clienta'} tiene ${group.length} turnos el ${getAppointmentDate(first)} a las ${getAppointmentTime(first)}`
+            });
+        }
+    });
+
+    appointments.filter(apt => apt.recurrence_id).forEach(apt => {
+        const date = typeof getAppointmentDate === 'function' ? getAppointmentDate(apt) : (apt.date || apt.apt_date || '');
+        const hours = typeof getBusinessHoursForDate === 'function' ? getBusinessHoursForDate(date) : null;
+        if (hours?.closed) {
+            alerts.push({
+                level: 'warning',
+                title: 'Recurrencia en día cerrado',
+                message: `${apt.clientName || apt.client_name || 'Clienta'} tiene cita recurrente el ${date}`
+            });
+        }
+    });
+
+    const stored = typeof getStoredBusinessAlerts === 'function' ? getStoredBusinessAlerts() : [];
+    stored.slice(0, 5).forEach(alert => alerts.push(alert));
+
+    return alerts.slice(0, 12);
+}
+
+function renderDashboardAlerts() {
+    const list = document.getElementById('widget-alerts');
+    if (!list) return;
+    const alerts = getDashboardAlerts();
+    if (alerts.length === 0) {
+        list.innerHTML = '<span style="color:var(--text-dim);font-size:0.85rem">Sin avisos relevantes.</span>';
+        return;
+    }
+    list.innerHTML = alerts.map(alert => {
+        const critical = alert.level === 'critical';
+        return `
+            <div class="widget-list-item ${critical ? 'stock-alert-critical' : 'stock-alert-item'}">
+                <div class="info">
+                    <span class="main-text">${dashboardEscape(alert.title)}</span>
+                    <span class="sub-text">${dashboardEscape(alert.message)}</span>
+                </div>
+                <span class="badge badge-border" style="color:${critical ? 'var(--danger)' : 'var(--warning)'};border-color:${critical ? 'var(--danger)' : 'var(--warning)'}">${critical ? 'Crítico' : 'Aviso'}</span>
+            </div>
+        `;
+    }).join('');
     if (typeof refreshIcons === 'function') refreshIcons();
 }
 
