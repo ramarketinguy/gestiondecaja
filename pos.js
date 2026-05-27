@@ -2782,14 +2782,23 @@ function initPOS() {
     const fullPriceContainer = document.getElementById('full-price-container');
     const fullPriceInput = document.getElementById('full-service-price');
     isPartialCheckbox.addEventListener('change', () => {
+        isPartialCheckbox.dataset.autoDebt = '0';
         if (isPartialCheckbox.checked) {
             fullPriceContainer.classList.remove('hidden');
             fullPriceInput.required = true;
+            const helper = document.getElementById('partial-payment-helper');
+            if (helper) helper.textContent = 'El monto ingresado se registrará como deuda pendiente.';
         } else {
             fullPriceContainer.classList.add('hidden');
             fullPriceInput.required = false;
+            fullPriceInput.value = '';
+            delete fullPriceInput.dataset.autoDebt;
+            resetAutoDebtState({ clearValue: true });
         }
     });
+
+    const amountInput = document.getElementById('amount');
+    if (amountInput) amountInput.addEventListener('input', syncAutoDebtFromFixedSale);
 
     const serviceSelect = document.getElementById('service');
     // Escuchar cambios de servicio para autocompletar precio si es fijo
@@ -2995,6 +3004,7 @@ function initPOSClientAutocomplete() {
 
     document.getElementById('apply-discount')?.addEventListener('change', (e) => {
         e.currentTarget.dataset.userChanged = '1';
+        syncAutoDebtFromFixedSale();
     });
 
     document.addEventListener('click', (e) => {
@@ -3267,6 +3277,76 @@ function getPosServiceSalePrice(service) {
 
 function getPosServicesTotal() {
     return getSelectedPosServices().reduce((sum, service) => sum + getPosServiceSalePrice(service), 0);
+}
+
+function getFixedSaleAutoDebtContext() {
+    const selected = getSelectedPosServices();
+    const amountInput = document.getElementById('amount');
+    const applyDiscount = document.getElementById('apply-discount');
+    if (!amountInput || selected.length === 0) return { eligible: false };
+    if (selected.some(service => !isFixedPriceService(service))) return { eligible: false };
+    if (applyDiscount?.checked) return { eligible: false };
+
+    const serviceTotal = getPosServicesTotal();
+    const productTotal = getPosProductTotal();
+    const expectedTotal = serviceTotal + productTotal;
+    const receivedAmount = parseFloat(amountInput.value);
+    if (expectedTotal <= 0 || Number.isNaN(receivedAmount) || receivedAmount < 0) return { eligible: false };
+
+    return {
+        eligible: true,
+        expectedTotal,
+        receivedAmount,
+        debtAmount: Math.max(0, expectedTotal - receivedAmount)
+    };
+}
+
+function resetAutoDebtState({ clearValue = false } = {}) {
+    const checkbox = document.getElementById('is-partial-payment');
+    const container = document.getElementById('full-price-container');
+    const input = document.getElementById('full-service-price');
+    const helper = document.getElementById('partial-payment-helper');
+    if (checkbox?.dataset.autoDebt === '1') {
+        checkbox.checked = false;
+        if (container) container.classList.add('hidden');
+        if (input) {
+            if (clearValue) input.value = '';
+            input.required = false;
+            delete input.dataset.autoDebt;
+        }
+    }
+    if (checkbox) {
+        delete checkbox.dataset.autoDebt;
+        delete checkbox.dataset.expectedTotal;
+        delete checkbox.dataset.receivedAmount;
+    }
+    if (helper) helper.textContent = 'El monto ingresado se registrará como deuda pendiente.';
+}
+
+function syncAutoDebtFromFixedSale() {
+    const checkbox = document.getElementById('is-partial-payment');
+    const container = document.getElementById('full-price-container');
+    const input = document.getElementById('full-service-price');
+    const helper = document.getElementById('partial-payment-helper');
+    if (!checkbox || !container || !input) return;
+
+    const ctx = getFixedSaleAutoDebtContext();
+    if (!ctx.eligible || ctx.debtAmount <= 0) {
+        resetAutoDebtState({ clearValue: true });
+        return;
+    }
+
+    checkbox.checked = true;
+    checkbox.dataset.autoDebt = '1';
+    checkbox.dataset.expectedTotal = String(ctx.expectedTotal);
+    checkbox.dataset.receivedAmount = String(ctx.receivedAmount);
+    container.classList.remove('hidden');
+    input.required = true;
+    input.value = String(Math.round(ctx.debtAmount * 100) / 100);
+    input.dataset.autoDebt = '1';
+    if (helper) {
+        helper.textContent = `Deuda calculada automáticamente: $${fmt(ctx.debtAmount)}. Total fijo $${fmt(ctx.expectedTotal)} - recibido $${fmt(ctx.receivedAmount)}.`;
+    }
 }
 
 function refreshPosServicesBreakdown() {
@@ -3623,6 +3703,7 @@ function syncSaleAmountFromFixedService() {
             const baseAmount = selectedServicesTotal > 0 ? selectedServicesTotal : window._chargeBaseAmount;
             amountInput.value = baseAmount + getPosProductTotal();
             refreshPosServicesBreakdown();
+            syncAutoDebtFromFixedSale();
         }
         return;
     }
@@ -3631,6 +3712,7 @@ function syncSaleAmountFromFixedService() {
     if (amountInput && selectedTotal > 0) {
         amountInput.value = selectedTotal + getPosProductTotal();
         refreshPosServicesBreakdown();
+        syncAutoDebtFromFixedSale();
         return;
     }
 
@@ -3638,6 +3720,7 @@ function syncSaleAmountFromFixedService() {
     if (amountInput && srv && srv.priceType === 'fijo') {
         amountInput.value = (parseFloat(srv.price) || 0) + getPosProductTotal();
     }
+    syncAutoDebtFromFixedSale();
 }
 
 function renderPosProducts() {
@@ -3854,7 +3937,9 @@ async function saveTransaction() {
             }
         }
 
-        const isPartial = document.getElementById('is-partial-payment').checked;
+        const partialCheckbox = document.getElementById('is-partial-payment');
+        const isPartial = partialCheckbox.checked;
+        const isAutoFixedDebt = partialCheckbox.dataset.autoDebt === '1';
         if (isPartial) {
             const debtAmount = parseFloat(document.getElementById('full-service-price').value);
             if (isNaN(debtAmount) || debtAmount <= 0) {
@@ -3862,7 +3947,7 @@ async function saveTransaction() {
                 document.getElementById('btn-save-transaction').disabled = false;
                 return;
             }
-            if (debtAmount >= transactionSchema.amount) {
+            if (!isAutoFixedDebt && debtAmount >= transactionSchema.amount) {
                 showToast('La deuda no puede ser mayor o igual al precio del servicio.', 'error');
                 document.getElementById('btn-save-transaction').disabled = false;
                 return;
@@ -3876,9 +3961,14 @@ async function saveTransaction() {
                 const fmt2 = n => Number(n).toLocaleString('es-UY');
                 addClientLog(currentClient.id, `⚠ DEUDA GENERADA: $${fmt2(debtAmount)}`);
             }
-            // Restar la deuda del monto registrado en caja (la clienta solo pagó la diferencia)
-            transactionSchema.amount = transactionSchema.amount - debtAmount;
-            transactionSchema.detail += ` (Generó Deuda: ${debtAmount})`;
+            if (isAutoFixedDebt) {
+                const expectedTotal = parseFloat(partialCheckbox.dataset.expectedTotal) || (transactionSchema.amount + debtAmount);
+                transactionSchema.detail += ` (Generó Deuda automática: ${debtAmount} de total ${expectedTotal})`;
+            } else {
+                // En deuda manual, el monto ingresado representa el total y se descuenta lo pendiente.
+                transactionSchema.amount = transactionSchema.amount - debtAmount;
+                transactionSchema.detail += ` (Generó Deuda: ${debtAmount})`;
+            }
         }
 
         if (transactionSchema.method === 'seña') {
@@ -4050,6 +4140,7 @@ async function saveTransaction() {
                 document.getElementById('is-partial-payment').checked = false;
                 document.getElementById('is-split-payment').checked = false;
                 document.getElementById('is-tip').checked = false;
+                resetAutoDebtState({ clearValue: true });
                 const defaultDepositMode = document.querySelector('input[name="deposit_mode"][value="next_service"]');
                 if (defaultDepositMode) defaultDepositMode.checked = true;
                 const defaultDepositMethod = document.querySelector('input[name="seña_method"][value="efectivo"]');
