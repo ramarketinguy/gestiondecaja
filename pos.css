@@ -464,6 +464,20 @@ input:checked + .slider:before { transform: translateX(24px); background-color: 
 }
 .seña-method-opt input[type="radio"] { display: none; }
 
+.client-deposits-list { margin-top: 0.8rem; display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto; }
+.client-deposit-item { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; padding: 10px 12px; background: rgba(96,165,250,0.08); border: 1px solid rgba(96,165,250,0.24); border-radius: var(--radius-sm); }
+.client-deposit-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.client-deposit-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.86rem; font-weight: 700; color: var(--text-primary); }
+.client-deposit-meta { font-size: 0.72rem; color: var(--text-dim); line-height: 1.35; }
+.client-deposit-actions { display: flex; gap: 6px; align-items: center; }
+.client-deposit-actions .btn-icon { border: 1px solid var(--border-subtle); background: rgba(0,0,0,0.16); }
+.deposit-modal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+@media (max-width: 680px) {
+    .client-deposit-item { grid-template-columns: 1fr; }
+    .client-deposit-actions { justify-content: flex-end; }
+    .deposit-modal-grid { grid-template-columns: 1fr; }
+}
+
 /* ═══════════ TABLAS ═══════════ */
 table { width: 100%; border-collapse: collapse; }
 th { text-align: left; padding: 0.9rem 1.2rem; font-size: 0.72rem; color: var(--text-dim); text-transform: uppercase; border-bottom: 1px solid var(--border-subtle); }

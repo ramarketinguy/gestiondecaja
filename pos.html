@@ -454,7 +454,16 @@
                                         <input type="radio" name="seña_method" value="tarjeta_credito"> Tarjeta Crédito
                                     </label>
                                 </div>
-                                <p style="margin:8px 0 0; font-size: 0.8rem; color:var(--text-dim);">El monto quedará guardado a favor de la clienta para descontar en próximas visitas.</p>
+                                <div style="font-weight:600; margin:14px 0 8px;">Uso de la seña</div>
+                                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                                    <label class="seña-method-opt">
+                                        <input type="radio" name="deposit_mode" value="next_service" checked> Próximo servicio
+                                    </label>
+                                    <label class="seña-method-opt">
+                                        <input type="radio" name="deposit_mode" value="permanent"> Permanente
+                                    </label>
+                                </div>
+                                <p style="margin:8px 0 0; font-size: 0.8rem; color:var(--text-dim);">Próximo servicio se descuenta automáticamente. Permanente queda como saldo manual a favor.</p>
                             </div>
                         </div>
                     </div>
@@ -1073,6 +1082,17 @@
                     <div class="form-group" style="margin-top: 1.5rem;">
                         <label>Notas, Tinturas y Acuerdos (Privado)</label>
                         <textarea class="textarea-custom" id="cm-notes" rows="4" placeholder="Ej: Usa color castaño claro (Fórmula: 6.0 + 20vol). Alérgica a X producto."></textarea>
+                    </div>
+
+                    <!-- Señas activas -->
+                    <div id="cm-deposits-section" class="hidden" style="margin-top:1.5rem;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;">
+                            <label style="font-size:0.78rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;">Señas activas</label>
+                            <button type="button" class="btn btn-ghost btn-sm" id="btn-client-deposit-refresh" style="padding:2px 8px;font-size:0.7rem;">
+                                <i data-lucide="refresh-cw" style="width:12px;height:12px"></i> Actualizar
+                            </button>
+                        </div>
+                        <div id="cm-deposits-list" class="client-deposits-list"></div>
                     </div>
 
                     <!-- Historial de Visitas -->

@@ -669,7 +669,15 @@ async function loadDataFromSupabase() {
             employeeId: t.employee_id || null,
             services: normalizeAppointmentServices(t.services),
             products: normalizeTransactionProducts(t.products),
-            productTotal: parseFloat(t.product_total) || 0
+            productTotal: parseFloat(t.product_total) || 0,
+            depositMode: t.deposit_mode || null,
+            depositPaymentMethod: t.deposit_payment_method || null,
+            depositAmount: t.deposit_amount === null || t.deposit_amount === undefined ? null : parseFloat(t.deposit_amount),
+            depositRemaining: t.deposit_remaining === null || t.deposit_remaining === undefined ? null : parseFloat(t.deposit_remaining),
+            depositStatus: t.deposit_status || null,
+            depositApplied: t.deposit_applied || null,
+            depositDiscountAmount: t.deposit_discount_amount === null || t.deposit_discount_amount === undefined ? null : parseFloat(t.deposit_discount_amount),
+            depositDiscountScope: t.deposit_discount_scope || null
         })},
         { name: 'appointments', stateKey: 'appointments', transform: a => ({
             ...a,
@@ -2907,6 +2915,40 @@ function updateFormSelects() {
     initCustomSelects(); // Refrescar todos los custom selects
 }
 
+function refreshDiscountAlertForClient(client) {
+    const discountAlert = document.getElementById('discount-alert');
+    const amountDisplay = document.getElementById('deposit-amount-display');
+    const applyDiscount = document.getElementById('apply-discount');
+    if (!discountAlert || !amountDisplay || !applyDiscount || !client) return;
+
+    const summary = getClientDepositSummary(client.id);
+    const fallbackBalance = Math.max(0, parseFloat(client.balance) || 0);
+    const availableTotal = fallbackBalance > 0 ? Math.min(summary.total || fallbackBalance, fallbackBalance) : summary.total;
+    if (availableTotal <= 0) {
+        discountAlert.classList.add('hidden');
+        applyDiscount.checked = false;
+        applyDiscount.dataset.depositScope = 'all';
+        return;
+    }
+
+    const nextServiceAmount = Math.min(summary.nextService, availableTotal);
+    const permanentAmount = Math.max(0, availableTotal - nextServiceAmount);
+    amountDisplay.textContent = fmt(availableTotal);
+    applyDiscount.dataset.depositScope = nextServiceAmount > 0 ? 'next_service' : 'all';
+    applyDiscount.checked = nextServiceAmount > 0;
+    applyDiscount.dataset.userChanged = '0';
+
+    const alertContent = discountAlert.querySelector('.alert-content p');
+    if (alertContent) {
+        if (nextServiceAmount > 0) {
+            alertContent.textContent = `Se descontarán automáticamente $${fmt(nextServiceAmount)} en esta venta.`;
+        } else {
+            alertContent.textContent = `Tiene $${fmt(permanentAmount)} de saldo permanente. Marcá la casilla si querés usarlo en esta venta.`;
+        }
+    }
+    discountAlert.classList.remove('hidden');
+}
+
 function initPOSClientAutocomplete() {
     const input = document.getElementById('client-name');
     const dropdown = document.getElementById('client-autocomplete');
@@ -2916,12 +2958,7 @@ function initPOSClientAutocomplete() {
         input.value = client.name;
         currentClient = client;
         dropdown.style.display = 'none';
-        if (client.balance > 0) {
-            discountAlert.classList.remove('hidden');
-            document.getElementById('deposit-amount-display').textContent = client.balance;
-        } else {
-            discountAlert.classList.add('hidden');
-        }
+        refreshDiscountAlertForClient(client);
     }
 
     input.addEventListener('input', (e) => {
@@ -2954,6 +2991,10 @@ function initPOSClientAutocomplete() {
             openQuickClientModal(e.target.value, selectClient);
         });
         dropdown.appendChild(createDiv);
+    });
+
+    document.getElementById('apply-discount')?.addEventListener('change', (e) => {
+        e.currentTarget.dataset.userChanged = '1';
     });
 
     document.addEventListener('click', (e) => {
@@ -3317,6 +3358,196 @@ function resetPosServices() {
     syncCustomSelect('service');
 }
 
+function isDepositTransaction(tx) {
+    return tx && tx.isIncome !== false && String(tx.method || '').toLowerCase() === 'seña';
+}
+
+function getTxClientId(tx) {
+    return tx ? (tx.clientId || tx.client_id || null) : null;
+}
+
+function getDepositMode(tx) {
+    return tx?.depositMode || tx?.deposit_mode || 'next_service';
+}
+
+function getDepositModeLabel(mode) {
+    return mode === 'permanent' ? 'Permanente' : 'Próximo servicio';
+}
+
+function getDepositPaymentMethod(tx) {
+    return tx?.depositPaymentMethod || tx?.deposit_payment_method || extractDepositPaymentMethod(tx?.detail) || 'efectivo';
+}
+
+function extractDepositPaymentMethod(detail = '') {
+    const text = String(detail || '').toLowerCase();
+    if (text.includes('transferencia')) return 'transferencia';
+    if (text.includes('tarjeta_debito') || text.includes('débito') || text.includes('debito')) return 'tarjeta_debito';
+    if (text.includes('tarjeta_credito') || text.includes('crédito') || text.includes('credito')) return 'tarjeta_credito';
+    if (text.includes('efectivo')) return 'efectivo';
+    return null;
+}
+
+function getDepositAmount(tx) {
+    const value = tx?.depositAmount ?? tx?.deposit_amount ?? tx?.amount ?? 0;
+    return parseFloat(value) || 0;
+}
+
+function getDepositRemaining(tx) {
+    const value = tx?.depositRemaining ?? tx?.deposit_remaining;
+    if (value !== null && value !== undefined && value !== '') return Math.max(0, parseFloat(value) || 0);
+    return getDepositAmount(tx);
+}
+
+function hasExplicitDepositRemaining(tx) {
+    const value = tx?.depositRemaining ?? tx?.deposit_remaining;
+    return value !== null && value !== undefined && value !== '';
+}
+
+function getDepositAvailable(tx) {
+    if (hasExplicitDepositRemaining(tx)) return getDepositRemaining(tx);
+    const clientId = getTxClientId(tx);
+    const client = db.clients.find(c => String(c.id) === String(clientId));
+    return Math.min(getDepositAmount(tx), Math.max(0, parseFloat(client?.balance) || 0));
+}
+
+function getDepositUsed(tx) {
+    return Math.max(0, getDepositAmount(tx) - getDepositRemaining(tx));
+}
+
+function getDepositStatus(tx) {
+    const status = tx?.depositStatus || tx?.deposit_status;
+    if (status) return status;
+    return getDepositRemaining(tx) > 0 ? 'active' : 'used';
+}
+
+function buildDepositDetail(paymentMethod, mode, extra = '') {
+    const methodLabel = {
+        efectivo: 'efectivo',
+        transferencia: 'transferencia',
+        tarjeta_debito: 'tarjeta débito',
+        tarjeta_credito: 'tarjeta crédito'
+    }[paymentMethod] || paymentMethod || 'efectivo';
+    const modeLabel = mode === 'permanent' ? 'permanente' : 'descuenta próximo servicio';
+    return `Seña / Depósito (cobrado en ${methodLabel} · ${modeLabel}${extra ? ' · ' + extra : ''})`;
+}
+
+function getClientDeposits(clientId, { activeOnly = false, mode = null } = {}) {
+    const client = db.clients.find(c => String(c.id) === String(clientId));
+    const clientBalance = Math.max(0, parseFloat(client?.balance) || 0);
+    return (db.transactions || [])
+        .filter(tx => isDepositTransaction(tx) && String(getTxClientId(tx)) === String(clientId))
+        .filter(tx => !mode || getDepositMode(tx) === mode)
+        .filter(tx => !activeOnly || (getDepositStatus(tx) === 'active' && getDepositRemaining(tx) > 0 && (hasExplicitDepositRemaining(tx) || clientBalance > 0)))
+        .sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
+}
+
+function getClientDepositSummary(clientId) {
+    const deposits = getClientDeposits(clientId, { activeOnly: true });
+    return deposits.reduce((acc, tx) => {
+        const remaining = getDepositAvailable(tx);
+        acc.total += remaining;
+        if (getDepositMode(tx) === 'permanent') acc.permanent += remaining;
+        else acc.nextService += remaining;
+        return acc;
+    }, { total: 0, nextService: 0, permanent: 0 });
+}
+
+function assignDepositFields(tx, fields) {
+    if (!tx) return;
+    if (fields.deposit_mode !== undefined) tx.depositMode = fields.deposit_mode;
+    if (fields.deposit_payment_method !== undefined) tx.depositPaymentMethod = fields.deposit_payment_method;
+    if (fields.deposit_amount !== undefined) tx.depositAmount = fields.deposit_amount;
+    if (fields.deposit_remaining !== undefined) tx.depositRemaining = fields.deposit_remaining;
+    if (fields.deposit_status !== undefined) tx.depositStatus = fields.deposit_status;
+    if (fields.deposit_applied !== undefined) tx.depositApplied = fields.deposit_applied;
+    if (fields.client_id !== undefined) tx.clientId = fields.client_id;
+    if (fields.client_name !== undefined) tx.clientName = fields.client_name;
+    if (fields.amount !== undefined) tx.amount = fields.amount;
+    if (fields.detail !== undefined) tx.detail = fields.detail;
+}
+
+async function updateDepositTransaction(tx, payload) {
+    if (!tx) return { error: { message: 'Seña no encontrada' } };
+    const isLocalId = isLocalRecordId(tx.id);
+    if (!isLocalId && window.supabaseClient) {
+        const { error } = await updateRowSafe('transactions', tx.id, payload);
+        if (error) return { error };
+    }
+    assignDepositFields(tx, payload);
+    persistCollectionLocal('transactions', db.transactions);
+    return { error: null };
+}
+
+async function setClientBalance(clientId, balance) {
+    const client = db.clients.find(c => String(c.id) === String(clientId));
+    if (!client) return { error: { message: 'Clienta no encontrada' } };
+    const nextBalance = Math.max(0, parseFloat(balance) || 0);
+    client.balance = nextBalance;
+    if (!isLocalRecordId(client.id) && window.supabaseClient) {
+        const { error } = await updateClientSafe(client.id, { balance: nextBalance });
+        if (error) return { error };
+    }
+    persistCollectionLocal('clients', db.clients);
+    return { error: null };
+}
+
+async function adjustClientBalance(clientId, delta) {
+    const client = db.clients.find(c => String(c.id) === String(clientId));
+    if (!client) return { error: { message: 'Clienta no encontrada' } };
+    return setClientBalance(client.id, (parseFloat(client.balance) || 0) + (parseFloat(delta) || 0));
+}
+
+async function applyDepositsToSale(clientId, amountToApply, scope = 'all') {
+    let remainingToApply = Math.max(0, parseFloat(amountToApply) || 0);
+    if (!clientId || remainingToApply <= 0) return { applied: 0, rows: [] };
+    const deposits = getClientDeposits(clientId, { activeOnly: true })
+        .filter(tx => scope === 'all' || getDepositMode(tx) === scope);
+    const rows = [];
+
+    for (const tx of deposits) {
+        if (remainingToApply <= 0) break;
+        const client = db.clients.find(c => String(c.id) === String(clientId));
+        const currentRemaining = hasExplicitDepositRemaining(tx)
+            ? getDepositRemaining(tx)
+            : Math.min(getDepositAmount(tx), Math.max(0, parseFloat(client?.balance) || 0));
+        if (currentRemaining <= 0) continue;
+        const use = Math.min(currentRemaining, remainingToApply);
+        const nextRemaining = currentRemaining - use;
+        const applied = Array.isArray(tx.depositApplied || tx.deposit_applied) ? [...(tx.depositApplied || tx.deposit_applied)] : [];
+        applied.push({ amount: use, at: new Date().toISOString() });
+        const payload = {
+            deposit_remaining: nextRemaining,
+            deposit_status: nextRemaining > 0 ? 'active' : 'used',
+            deposit_applied: applied
+        };
+        const { error } = await updateDepositTransaction(tx, payload);
+        if (error) throw error;
+        rows.push({ tx, amount: use });
+        remainingToApply -= use;
+    }
+
+    const appliedTotal = rows.reduce((sum, row) => sum + row.amount, 0);
+    if (appliedTotal > 0) await adjustClientBalance(clientId, -appliedTotal);
+    if (appliedTotal === 0 && scope === 'all') {
+        const client = db.clients.find(c => String(c.id) === String(clientId));
+        const fallback = Math.min(parseFloat(client?.balance) || 0, parseFloat(amountToApply) || 0);
+        if (fallback > 0) {
+            await adjustClientBalance(clientId, -fallback);
+            return { applied: fallback, rows: [] };
+        }
+    }
+    return { applied: appliedTotal, rows };
+}
+
+function refreshClientDepositIndicators(clientId) {
+    if (clientId && activeModal && String(activeModal) === String(clientId)) renderClientDeposits(clientId);
+    if (currentView === 'clients') renderClientsTable();
+    if (currentView === 'caja') {
+        updateStats();
+        renderTransactionsTable();
+    }
+}
+
 function setDepositEntryMode(enabled) {
     const method = document.getElementById('payment-method');
     const serviceSelect = document.getElementById('service');
@@ -3603,18 +3834,23 @@ async function saveTransaction() {
 
         const applyDiscount = document.getElementById('apply-discount').checked;
         if (applyDiscount && currentClient && currentClient.balance > 0) {
-            const cb = parseFloat(currentClient.balance);
-            if (amount <= cb) {
-                currentClient.balance = cb - amount;
-                transactionSchema.amount = 0; 
-                transactionSchema.detail += " (Pagado con seña)";
-            } else {
-                currentClient.balance = 0;
-                transactionSchema.amount = amount - cb; 
-                transactionSchema.detail += ` (Desc. de seña: -${cb})`;
-            }
-            if (window.supabaseClient && !isLocalRecordId(currentClient.id)) {
-                await updateClientSafe(currentClient.id, { balance: currentClient.balance });
+            const discountScope = document.getElementById('apply-discount')?.dataset.depositScope || 'all';
+            const summary = getClientDepositSummary(currentClient.id);
+            const clientBalance = Math.max(0, parseFloat(currentClient.balance) || 0);
+            const availableByScope = discountScope === 'next_service'
+                ? Math.min(summary.nextService, clientBalance)
+                : Math.min(summary.total || clientBalance, clientBalance);
+            const discountAmount = Math.min(amount, Math.max(0, availableByScope));
+            if (discountAmount > 0) {
+                if (amount <= discountAmount) {
+                    transactionSchema.amount = 0;
+                    transactionSchema.detail += " (Pagado con seña)";
+                } else {
+                    transactionSchema.amount = amount - discountAmount;
+                    transactionSchema.detail += ` (Desc. de seña: -${discountAmount})`;
+                }
+                transactionSchema.deposit_discount_amount = discountAmount;
+                transactionSchema.deposit_discount_scope = discountScope;
             }
         }
 
@@ -3648,8 +3884,14 @@ async function saveTransaction() {
         if (transactionSchema.method === 'seña') {
             // Leer cómo fue cobrada la seña y guardarlo en detail
             const señaMethod = document.querySelector('input[name="seña_method"]:checked')?.value || 'efectivo';
-            transactionSchema.detail += ` (cobrado en ${señaMethod})`;
+            const depositMode = document.querySelector('input[name="deposit_mode"]:checked')?.value || 'next_service';
+            transactionSchema.detail = buildDepositDetail(señaMethod, depositMode);
             transactionSchema.method = 'seña'; // sigue siendo seña para el balance
+            transactionSchema.deposit_mode = depositMode;
+            transactionSchema.deposit_payment_method = señaMethod;
+            transactionSchema.deposit_amount = transactionSchema.amount;
+            transactionSchema.deposit_remaining = transactionSchema.amount;
+            transactionSchema.deposit_status = 'active';
             if (currentClient) {
                 currentClient.balance = (parseFloat(currentClient.balance) || 0) + transactionSchema.amount;
                 if (window.supabaseClient && !isLocalRecordId(currentClient.id)) {
@@ -3753,7 +3995,15 @@ async function saveTransaction() {
                 employeeId: t.employee_id || originalTx.employee_id || null,
                 services: normalizeAppointmentServices(t.services || originalTx.services),
                 products: normalizeTransactionProducts(t.products || originalTx.products),
-                productTotal: parseFloat(t.product_total || originalTx.product_total) || 0
+                productTotal: parseFloat(t.product_total || originalTx.product_total) || 0,
+                depositMode: t.deposit_mode || originalTx.deposit_mode || null,
+                depositPaymentMethod: t.deposit_payment_method || originalTx.deposit_payment_method || null,
+                depositAmount: t.deposit_amount ?? originalTx.deposit_amount ?? null,
+                depositRemaining: t.deposit_remaining ?? originalTx.deposit_remaining ?? null,
+                depositStatus: t.deposit_status || originalTx.deposit_status || null,
+                depositApplied: t.deposit_applied || originalTx.deposit_applied || null,
+                depositDiscountAmount: t.deposit_discount_amount ?? originalTx.deposit_discount_amount ?? null,
+                depositDiscountScope: t.deposit_discount_scope || originalTx.deposit_discount_scope || null
             });
         });
         persistCollectionLocal('transactions', db.transactions);
@@ -3761,6 +4011,22 @@ async function saveTransaction() {
         // IDs para limpieza posterior
         const savedAppointmentId = window._chargeAppointmentId;
         const savedClientId = isIncome ? (transactionSchema?.client_id || null) : null;
+
+        if (isIncome && transactionSchema.deposit_discount_amount && savedClientId) {
+            try {
+                const applied = await applyDepositsToSale(
+                    savedClientId,
+                    transactionSchema.deposit_discount_amount,
+                    transactionSchema.deposit_discount_scope || 'all'
+                );
+                if (applied.applied > 0) {
+                    addClientLog(savedClientId, `Seña aplicada: $${fmt(applied.applied)}`);
+                }
+            } catch (err) {
+                console.error('[Señas] Error aplicando seña:', err);
+                showToast('La venta se registró, pero no se pudo descontar la seña. Revisar ficha de clienta.', 'error');
+            }
+        }
 
         // --- Limpieza de UI y Estado ---
         try {
@@ -3784,6 +4050,10 @@ async function saveTransaction() {
                 document.getElementById('is-partial-payment').checked = false;
                 document.getElementById('is-split-payment').checked = false;
                 document.getElementById('is-tip').checked = false;
+                const defaultDepositMode = document.querySelector('input[name="deposit_mode"][value="next_service"]');
+                if (defaultDepositMode) defaultDepositMode.checked = true;
+                const defaultDepositMethod = document.querySelector('input[name="seña_method"][value="efectivo"]');
+                if (defaultDepositMethod) defaultDepositMethod.checked = true;
                 document.getElementById('split-toggle-row').classList.remove('hidden');
                 
                 resetPosProducts();
@@ -4108,6 +4378,15 @@ function openTransactionDetail(data) {
         contentHTML += `
             <div style="grid-column:span 2; margin-top: 1rem;">
                 <button type="button" onclick="document.getElementById('modal-transaction-detail').classList.remove('open');setTimeout(()=>openClientModal('${t.clientId}'),150);" class="btn btn-ghost btn-sm" style="width:100%; justify-content:center;">👤 Ver ficha de clienta</button>
+            </div>
+        `;
+    }
+
+    if (!isGroup && isDepositTransaction(t)) {
+        contentHTML += `
+            <div style="grid-column:span 2;display:flex;gap:.5rem;margin-top:.5rem;">
+                <button type="button" onclick="openDepositEditor('${t.id}')" class="btn btn-ghost btn-sm" style="flex:1;justify-content:center;"><i data-lucide="pencil"></i> Editar seña</button>
+                <button type="button" onclick="deleteDeposit('${t.id}')" class="btn btn-ghost btn-sm" style="flex:1;justify-content:center;color:var(--danger);border-color:rgba(248,113,113,.35);"><i data-lucide="trash-2"></i> Eliminar seña</button>
             </div>
         `;
     }
@@ -4520,6 +4799,10 @@ async function deleteClosureTransaction(txIds, closureId) {
     if (!txIds || txIds.length === 0) return;
     const txs = db.transactions.filter(t => txIds.includes(String(t.id)));
     if (txs.length === 0) return;
+    if (txs.some(isDepositTransaction)) {
+        showToast('Las señas se eliminan desde la ficha de clienta para mantener el saldo correcto.', 'error');
+        return;
+    }
     const main = txs.find(t => !txIsTip(t)) || txs[0];
     const label = `${main.clientName || (main.isIncome ? 'General' : 'Retiro')} · ${(main.detail || '').split(' (')[0]}`;
     const ok = await showCustomConfirm(
@@ -4637,6 +4920,11 @@ function openEditTransactionModal(txs, returnToClosureId) {
 }
 
 async function saveTransactionEdits(txIds, returnToClosureId) {
+    const currentTxs = db.transactions.filter(t => txIds.map(String).includes(String(t.id)));
+    if (currentTxs.some(isDepositTransaction)) {
+        showToast('Las señas se editan desde la ficha de clienta para mantener el saldo correcto.', 'error');
+        return;
+    }
     const updates = [];
     document.querySelectorAll('.edit-tx-amount').forEach(input => {
         const id = input.dataset.txId;
@@ -5030,6 +5318,7 @@ function openClientModal(clientId = null) {
             document.getElementById('cm-history-section').classList.remove('hidden');
             document.getElementById('cm-files-section').classList.remove('hidden');
             renderClientHistory(clientId);
+            renderClientDeposits(clientId);
             renderClientFiles(clientId);
         }
     } else {
@@ -5041,6 +5330,7 @@ function openClientModal(clientId = null) {
         photoEl.src = '';
         photoEl.classList.add('hidden');
         document.getElementById('cm-history-section').classList.add('hidden');
+        document.getElementById('cm-deposits-section')?.classList.add('hidden');
         document.getElementById('cm-files-section').classList.add('hidden');
     }
     refreshIcons();
@@ -5238,6 +5528,212 @@ function addClientLog(clientId, message) {
     logs.unshift({ ts: new Date().toISOString(), msg: message });
     if (logs.length > 30) logs.pop();
     localStorage.setItem(key, JSON.stringify(logs));
+}
+
+function renderClientDeposits(clientId) {
+    const section = document.getElementById('cm-deposits-section');
+    const list = document.getElementById('cm-deposits-list');
+    const refreshBtn = document.getElementById('btn-client-deposit-refresh');
+    if (!section || !list) return;
+    const deposits = getClientDeposits(clientId, { activeOnly: true });
+    section.classList.remove('hidden');
+    if (refreshBtn) refreshBtn.onclick = () => renderClientDeposits(clientId);
+
+    if (deposits.length === 0) {
+        list.innerHTML = `<div style="text-align:center;padding:1rem;color:var(--text-dim);font-size:0.8rem;border:1px dashed var(--border-subtle);border-radius:var(--radius-sm);">No hay señas activas para gestionar.</div>`;
+        return;
+    }
+
+    list.innerHTML = deposits.map(tx => {
+        const dateStr = tx.date ? new Date(tx.date).toLocaleDateString('es-UY', { day:'2-digit', month:'2-digit', year:'numeric' }) : 'Sin fecha';
+        const remaining = getDepositAvailable(tx);
+        const used = getDepositUsed(tx);
+        const mode = getDepositMode(tx);
+        const payment = getDepositPaymentMethod(tx).replace('tarjeta_', 'tarjeta ');
+        return `
+            <div class="client-deposit-item" data-deposit-id="${tx.id}">
+                <div class="client-deposit-main">
+                    <div class="client-deposit-title">
+                        <span>$${fmt(remaining)} disponibles</span>
+                        <span class="badge badge-seña">${getDepositModeLabel(mode)}</span>
+                    </div>
+                    <div class="client-deposit-meta">
+                        Original: $${fmt(getDepositAmount(tx))}${used > 0 ? ` · Usado: $${fmt(used)}` : ''} · ${dateStr} · ${payment}
+                    </div>
+                </div>
+                <div class="client-deposit-actions">
+                    <button type="button" class="btn-icon btn-edit-deposit" data-id="${tx.id}" title="Editar seña"><i data-lucide="pencil"></i></button>
+                    <button type="button" class="btn-icon btn-delete-deposit" data-id="${tx.id}" title="Eliminar seña"><i data-lucide="trash-2"></i></button>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    list.querySelectorAll('.btn-edit-deposit').forEach(btn => {
+        btn.onclick = () => openDepositEditor(btn.dataset.id);
+    });
+    list.querySelectorAll('.btn-delete-deposit').forEach(btn => {
+        btn.onclick = () => deleteDeposit(btn.dataset.id);
+    });
+    refreshIcons();
+}
+
+function openDepositEditor(txId) {
+    const tx = db.transactions.find(t => String(t.id) === String(txId));
+    if (!tx) return showToast('No se encontró la seña.', 'error');
+    const clientOptions = db.clients
+        .filter(c => c.name)
+        .sort((a, b) => String(a.name).localeCompare(String(b.name), 'es'))
+        .map(c => `<option value="${c.id}" ${String(c.id) === String(getTxClientId(tx)) ? 'selected' : ''}>${escapeHtml(c.name)}</option>`)
+        .join('');
+    const used = getDepositUsed(tx);
+    const overlay = document.createElement('div');
+    overlay.id = 'modal-deposit-editor';
+    overlay.className = 'modal-overlay open';
+    overlay.style.zIndex = '850';
+    overlay.innerHTML = `
+        <div class="modal" style="max-width:560px;">
+            <div class="modal-header">
+                <h2><i data-lucide="piggy-bank" style="color:var(--info);"></i> Editar seña</h2>
+                <button class="modal-close-btn" id="deposit-editor-close"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body" style="padding:1.5rem;">
+                ${used > 0 ? `<div class="form-alert" style="margin:0 0 1rem;background:rgba(248,113,113,0.08);border-color:rgba(248,113,113,0.28);"><i data-lucide="alert-triangle"></i><div style="font-size:.84rem;color:var(--text-secondary);">Esta seña ya usó $${fmt(used)}. El monto total no puede quedar por debajo de eso.</div></div>` : ''}
+                <div class="deposit-modal-grid">
+                    <div class="form-group">
+                        <label>Monto total de la seña ($)</label>
+                        <div class="input-wrap"><i data-lucide="dollar-sign"></i><input type="number" id="dep-edit-amount" min="${Math.ceil(used)}" step="1" value="${getDepositAmount(tx)}"></div>
+                    </div>
+                    <div class="form-group">
+                        <label>Clienta asignada</label>
+                        <div class="input-wrap"><i data-lucide="user"></i><select id="dep-edit-client" class="custom-select">${clientOptions}</select></div>
+                    </div>
+                    <div class="form-group">
+                        <label>Uso de la seña</label>
+                        <div class="input-wrap"><i data-lucide="repeat"></i><select id="dep-edit-mode" class="custom-select">
+                            <option value="next_service" ${getDepositMode(tx) === 'next_service' ? 'selected' : ''}>Próximo servicio</option>
+                            <option value="permanent" ${getDepositMode(tx) === 'permanent' ? 'selected' : ''}>Permanente</option>
+                        </select></div>
+                    </div>
+                    <div class="form-group">
+                        <label>Forma en que se cobró</label>
+                        <div class="input-wrap"><i data-lucide="credit-card"></i><select id="dep-edit-payment" class="custom-select">
+                            <option value="efectivo" ${getDepositPaymentMethod(tx) === 'efectivo' ? 'selected' : ''}>Efectivo</option>
+                            <option value="transferencia" ${getDepositPaymentMethod(tx) === 'transferencia' ? 'selected' : ''}>Transferencia</option>
+                            <option value="tarjeta_debito" ${getDepositPaymentMethod(tx) === 'tarjeta_debito' ? 'selected' : ''}>Tarjeta Débito</option>
+                            <option value="tarjeta_credito" ${getDepositPaymentMethod(tx) === 'tarjeta_credito' ? 'selected' : ''}>Tarjeta Crédito</option>
+                        </select></div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-ghost" id="dep-edit-cancel">Cancelar</button>
+                <button type="button" class="btn btn-primary" id="dep-edit-save"><i data-lucide="check"></i> Guardar cambios</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.querySelector('#deposit-editor-close').onclick = close;
+    overlay.querySelector('#dep-edit-cancel').onclick = close;
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+    overlay.querySelector('#dep-edit-save').onclick = async () => {
+        await saveDepositEdit(txId);
+    };
+    initCustomSelects();
+    refreshIcons();
+}
+
+async function saveDepositEdit(txId) {
+    const tx = db.transactions.find(t => String(t.id) === String(txId));
+    if (!tx) return showToast('No se encontró la seña.', 'error');
+    const used = getDepositUsed(tx);
+    const oldRemaining = getDepositAvailable(tx);
+    const oldClientId = getTxClientId(tx);
+    const amount = parseFloat(document.getElementById('dep-edit-amount')?.value);
+    const newClientId = document.getElementById('dep-edit-client')?.value;
+    const mode = document.getElementById('dep-edit-mode')?.value || 'next_service';
+    const paymentMethod = document.getElementById('dep-edit-payment')?.value || 'efectivo';
+    const newClient = db.clients.find(c => String(c.id) === String(newClientId));
+
+    if (!newClient) return showToast('Seleccione una clienta válida.', 'error');
+    if (isNaN(amount) || amount <= 0) return showToast('Ingrese un monto válido.', 'error');
+    if (amount < used) return showToast(`Esta seña ya usó $${fmt(used)}. El monto no puede ser menor.`, 'error');
+
+    const nextRemaining = amount - used;
+    const payload = {
+        amount,
+        client_id: newClient.id,
+        client_name: newClient.name,
+        detail: buildDepositDetail(paymentMethod, mode),
+        deposit_mode: mode,
+        deposit_payment_method: paymentMethod,
+        deposit_amount: amount,
+        deposit_remaining: nextRemaining,
+        deposit_status: nextRemaining > 0 ? 'active' : 'used'
+    };
+
+    const saveBtn = document.getElementById('dep-edit-save');
+    if (saveBtn) saveBtn.disabled = true;
+    const { error } = await updateDepositTransaction(tx, payload);
+    if (saveBtn) saveBtn.disabled = false;
+    if (error) return showToast('No se pudo guardar la seña: ' + error.message, 'error');
+
+    if (String(oldClientId) === String(newClient.id)) {
+        await adjustClientBalance(newClient.id, nextRemaining - oldRemaining);
+    } else {
+        if (oldClientId) await adjustClientBalance(oldClientId, -oldRemaining);
+        await adjustClientBalance(newClient.id, nextRemaining);
+        if (oldClientId) addClientLog(oldClientId, `Seña movida a ${newClient.name}: -$${fmt(oldRemaining)}`);
+        addClientLog(newClient.id, `Seña recibida desde otra ficha: $${fmt(nextRemaining)}`);
+    }
+    addClientLog(newClient.id, `Seña actualizada: $${fmt(nextRemaining)} disponibles (${getDepositModeLabel(mode)})`);
+    document.getElementById('modal-deposit-editor')?.remove();
+    refreshClientDepositIndicators(newClient.id);
+    if (oldClientId && String(oldClientId) !== String(newClient.id)) refreshClientDepositIndicators(oldClientId);
+    showToast('Seña actualizada.', 'success');
+}
+
+async function deleteDeposit(txId) {
+    const tx = db.transactions.find(t => String(t.id) === String(txId));
+    if (!tx) return showToast('No se encontró la seña.', 'error');
+    const clientId = getTxClientId(tx);
+    const remaining = getDepositAvailable(tx);
+    const used = getDepositUsed(tx);
+    const client = db.clients.find(c => String(c.id) === String(clientId));
+    const msg = used > 0
+        ? `Esta seña ya usó $${fmt(used)}.\n\nSe anulará solamente el saldo restante de $${fmt(remaining)} para no romper el historial.`
+        : `¿Eliminar la seña de $${fmt(remaining)}${client ? ' de ' + client.name : ''}?\n\nEsto quitará el saldo a favor y borrará el movimiento.`;
+    const ok = await showCustomConfirm(msg, { title: 'Eliminar seña', confirmText: used > 0 ? 'Anular saldo restante' : 'Eliminar', danger: true });
+    if (!ok) return;
+
+    try {
+        if (used > 0) {
+            const payload = {
+                deposit_remaining: 0,
+                deposit_status: 'cancelled',
+                detail: buildDepositDetail(getDepositPaymentMethod(tx), getDepositMode(tx), 'saldo restante anulado')
+            };
+            const { error } = await updateDepositTransaction(tx, payload);
+            if (error) throw error;
+            await adjustClientBalance(clientId, -remaining);
+            addClientLog(clientId, `Saldo restante de seña anulado: -$${fmt(remaining)}`);
+        } else {
+            if (!isLocalRecordId(tx.id) && window.supabaseClient) {
+                const { error } = await deleteRowSafe('transactions', tx.id);
+                if (error) throw error;
+            }
+            db.transactions = db.transactions.filter(t => String(t.id) !== String(tx.id));
+            persistCollectionLocal('transactions', db.transactions);
+            await adjustClientBalance(clientId, -remaining);
+            addClientLog(clientId, `Seña eliminada: -$${fmt(remaining)}`);
+        }
+        refreshClientDepositIndicators(clientId);
+        showToast(used > 0 ? 'Saldo restante anulado.' : 'Seña eliminada.', 'success');
+    } catch (err) {
+        console.error('[Señas] Error eliminando:', err);
+        showToast('No se pudo eliminar la seña: ' + (err.message || err), 'error');
+    }
 }
 
 function renderClientHistory(clientId) {
@@ -7173,13 +7669,7 @@ function chargeAppointment(id) {
             window.currentClient = clientObj;
             const discountAlert = document.getElementById('discount-alert');
             if (discountAlert) {
-                if (clientObj.balance > 0) {
-                    discountAlert.classList.remove('hidden');
-                    const display = document.getElementById('deposit-amount-display');
-                    if (display) display.textContent = clientObj.balance;
-                } else {
-                    discountAlert.classList.add('hidden');
-                }
+                refreshDiscountAlertForClient(clientObj);
             }
         }
     }
