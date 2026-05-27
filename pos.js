@@ -4389,6 +4389,14 @@ function openTransactionDetail(data) {
                 <button type="button" onclick="deleteDeposit('${t.id}')" class="btn btn-ghost btn-sm" style="flex:1;justify-content:center;color:var(--danger);border-color:rgba(248,113,113,.35);"><i data-lucide="trash-2"></i> Eliminar seña</button>
             </div>
         `;
+    } else {
+        const actionIds = (isGroup ? data : [t]).map(tx => tx.id).join(',');
+        contentHTML += `
+            <div style="grid-column:span 2;display:flex;gap:.5rem;margin-top:.5rem;">
+                <button type="button" onclick="editTransactionFromDetail('${actionIds}')" class="btn btn-ghost btn-sm" style="flex:1;justify-content:center;"><i data-lucide="pencil"></i> Editar movimiento</button>
+                <button type="button" onclick="deleteTransactionFromDetail('${actionIds}')" class="btn btn-ghost btn-sm" style="flex:1;justify-content:center;color:var(--danger);border-color:rgba(248,113,113,.35);"><i data-lucide="trash-2"></i> Eliminar movimiento</button>
+            </div>
+        `;
     }
 
     contentHTML += `</div>`;
@@ -4796,6 +4804,22 @@ async function deleteClosureFull(closureId) {
 }
 
 async function deleteClosureTransaction(txIds, closureId) {
+    return deleteTransactionGroup(txIds, { returnToClosureId: closureId });
+}
+
+async function deleteTransactionFromDetail(txIdsCsv) {
+    const txIds = String(txIdsCsv || '').split(',').filter(Boolean);
+    return deleteTransactionGroup(txIds, { returnToClosureId: null });
+}
+
+function editTransactionFromDetail(txIdsCsv) {
+    const txIds = String(txIdsCsv || '').split(',').filter(Boolean);
+    const txs = db.transactions.filter(t => txIds.includes(String(t.id)));
+    if (txs.length === 0) return;
+    openEditTransactionModal(txs, null);
+}
+
+async function deleteTransactionGroup(txIds, { returnToClosureId = null } = {}) {
     if (!txIds || txIds.length === 0) return;
     const txs = db.transactions.filter(t => txIds.includes(String(t.id)));
     if (txs.length === 0) return;
@@ -4826,10 +4850,11 @@ async function deleteClosureTransaction(txIds, closureId) {
         // Refresh closure detail and parent table
         if (typeof renderTransactionsTable === 'function') renderTransactionsTable();
         if (typeof updateStats === 'function') updateStats();
-        renderClosuresHistory();
-        openClosureDetailModal(closureId);
+        if (typeof renderClosuresHistory === 'function') renderClosuresHistory();
+        if (returnToClosureId) openClosureDetailModal(returnToClosureId);
+        else document.getElementById('modal-transaction-detail')?.classList.remove('open');
     } catch (e) {
-        console.error('[Cierre] Error al eliminar transacción:', e);
+        console.error('[Caja] Error al eliminar transacción:', e);
         showToast('Error al eliminar: ' + (e.message || e), 'error');
     }
 }
@@ -4866,7 +4891,6 @@ function openEditTransactionModal(txs, returnToClosureId) {
                         <option value="transferencia" ${t.method === 'transferencia' ? 'selected' : ''}>Transferencia</option>
                         <option value="tarjeta_debito" ${t.method === 'tarjeta_debito' ? 'selected' : ''}>Tarjeta Débito</option>
                         <option value="tarjeta_credito" ${t.method === 'tarjeta_credito' ? 'selected' : ''}>Tarjeta Crédito</option>
-                        <option value="seña" ${t.method === 'seña' ? 'selected' : ''}>Seña</option>
                     </select>
                 </div>
             </div>
@@ -4905,14 +4929,24 @@ function openEditTransactionModal(txs, returnToClosureId) {
         </div>
     `;
 
-    // Reutilizar el modal de detalle de cierre como contenedor temporal de edición
-    document.getElementById('closure-detail-body').innerHTML = bodyHTML;
-    document.getElementById('modal-closure-detail').classList.add('open');
+    const bodyTarget = returnToClosureId
+        ? document.getElementById('closure-detail-body')
+        : document.getElementById('txdetail-body');
+    const modalTarget = returnToClosureId
+        ? document.getElementById('modal-closure-detail')
+        : document.getElementById('modal-transaction-detail');
+    if (!bodyTarget || !modalTarget) return showToast('No se encontró el modal de edición.', 'error');
+    bodyTarget.innerHTML = bodyHTML;
+    modalTarget.classList.add('open');
     refreshIcons();
 
     document.getElementById('btn-cancel-edit-tx').onclick = () => {
         if (returnToClosureId) openClosureDetailModal(returnToClosureId);
-        else document.getElementById('modal-closure-detail').classList.remove('open');
+        else {
+            const current = db.transactions.filter(t => txs.map(tx => String(tx.id)).includes(String(t.id)));
+            if (current.length > 0) openTransactionDetail(current.length === 1 ? current[0] : current);
+            else document.getElementById('modal-transaction-detail')?.classList.remove('open');
+        }
     };
     document.getElementById('btn-save-edit-tx').onclick = async () => {
         await saveTransactionEdits(txs.map(t => t.id), returnToClosureId);
@@ -4954,9 +4988,13 @@ async function saveTransactionEdits(txIds, returnToClosureId) {
         showToast('Movimiento actualizado.', 'success');
         if (typeof renderTransactionsTable === 'function') renderTransactionsTable();
         if (typeof updateStats === 'function') updateStats();
-        renderClosuresHistory();
+        if (typeof renderClosuresHistory === 'function') renderClosuresHistory();
         if (returnToClosureId) openClosureDetailModal(returnToClosureId);
-        else document.getElementById('modal-closure-detail').classList.remove('open');
+        else {
+            const edited = db.transactions.filter(t => txIds.map(String).includes(String(t.id)));
+            if (edited.length > 0) openTransactionDetail(edited.length === 1 ? edited[0] : edited);
+            else document.getElementById('modal-transaction-detail')?.classList.remove('open');
+        }
     } catch (e) {
         console.error('[EditTx] Error:', e);
         showToast('Error al guardar: ' + (e.message || e), 'error');
