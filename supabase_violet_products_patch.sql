@@ -39,6 +39,13 @@ create index if not exists idx_transactions_employee_id on public.transactions(e
 
 grant usage on schema public to authenticated;
 grant select, insert, update, delete on public.products to authenticated;
+grant usage, select on all sequences in schema public to authenticated;
+
+alter default privileges in schema public
+grant select, insert, update, delete on tables to authenticated;
+
+alter default privileges in schema public
+grant usage, select on sequences to authenticated;
 
 alter table public.products enable row level security;
 

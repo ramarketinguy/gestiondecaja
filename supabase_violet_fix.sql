@@ -113,7 +113,31 @@ create index if not exists idx_tasks_user_id on public.tasks(user_id);
 create index if not exists idx_closures_user_id_date on public.closures(user_id, closure_date);
 create index if not exists idx_client_files_client_id on public.client_files(client_id);
 
--- 6) Activar RLS y permitir que cada usuario autenticado gestione sus datos.
+-- 6) Permisos API explicitos para supabase-js/PostgREST.
+-- RLS sigue filtrando filas por usuario autenticado.
+grant usage on schema public to authenticated;
+
+grant select, insert, update, delete on table
+    public.clients,
+    public.appointments,
+    public.transactions,
+    public.employees,
+    public.services,
+    public.tasks,
+    public.closures,
+    public.business_config,
+    public.client_files
+to authenticated;
+
+grant usage, select on all sequences in schema public to authenticated;
+
+alter default privileges in schema public
+grant select, insert, update, delete on tables to authenticated;
+
+alter default privileges in schema public
+grant usage, select on sequences to authenticated;
+
+-- 7) Activar RLS y permitir que cada usuario autenticado gestione sus datos.
 alter table public.clients enable row level security;
 alter table public.appointments enable row level security;
 alter table public.transactions enable row level security;

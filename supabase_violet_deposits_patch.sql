@@ -17,4 +17,7 @@ create index if not exists idx_transactions_deposit_client
     on public.transactions(client_id, deposit_status)
     where method = 'seña';
 
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on table public.transactions to authenticated;
+
 commit;

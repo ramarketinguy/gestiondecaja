@@ -23,6 +23,9 @@ update public.closures set user_id = (select id from first_user) where user_id i
 
 create index if not exists idx_closures_user_id_date on public.closures(user_id, closure_date);
 
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on table public.closures to authenticated;
+
 alter table public.closures enable row level security;
 
 drop policy if exists "violet_owner_all_closures" on public.closures;

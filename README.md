@@ -22,7 +22,7 @@
 ### Pasos Rápidos
 1. Clonar repositorio
 2. Crear proyecto en Supabase y copiar credenciales en `config.js`
-3. Crear tablas ejecutando `supabase_violet_fix.sql`, `supabase_violet_products_patch.sql` y `supabase_violet_closures_patch.sql`
+3. Crear tablas ejecutando `supabase_violet_fix.sql`, `supabase_violet_products_patch.sql`, `supabase_violet_closures_patch.sql`, `supabase_violet_deposits_patch.sql` y `supabase_violet_api_grants_patch.sql`
 4. Ejecutar servidor local: `python -m http.server 3000`
 5. Abrir http://localhost:3000
 
@@ -159,6 +159,8 @@ await logout();
 - `supabase_violet_fix.sql` - esquema base, RLS y tablas principales.
 - `supabase_violet_products_patch.sql` - productos, stock y columnas para ventas con productos/servicios múltiples.
 - `supabase_violet_closures_patch.sql` - ajustes de cierres de caja.
+- `supabase_violet_deposits_patch.sql` - metadata editable para señas.
+- `supabase_violet_api_grants_patch.sql` - permisos explícitos para Supabase Data API (`supabase-js`/PostgREST) manteniendo RLS.
 
 Tablas necesarias:
 1. `clients` - Base de datos de clientes
@@ -175,6 +177,8 @@ Tablas necesarias:
 ### Seguridad - Row Level Security (RLS)
 
 ⚠️ **CRÍTICO:** Habilitar RLS en todas las tablas para proteger datos.
+
+Además de RLS, Supabase requiere `GRANT` explícitos para que las tablas sean accesibles desde la Data API. Violet usa sesión autenticada, por eso las tablas del sistema deben tener permisos para el rol `authenticated`. No otorgar permisos a `anon` salvo que una tabla sea realmente pública.
 
 Ejemplo:
 ```sql
