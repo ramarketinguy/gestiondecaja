@@ -2798,7 +2798,7 @@ function initPOS() {
     });
 
     const amountInput = document.getElementById('amount');
-    if (amountInput) amountInput.addEventListener('input', syncAutoDebtFromFixedSale);
+    if (amountInput) amountInput.addEventListener('input', syncAutoDebtFromSale);
 
     const serviceSelect = document.getElementById('service');
     // Escuchar cambios de servicio para autocompletar precio si es fijo
@@ -3004,7 +3004,7 @@ function initPOSClientAutocomplete() {
 
     document.getElementById('apply-discount')?.addEventListener('change', (e) => {
         e.currentTarget.dataset.userChanged = '1';
-        syncAutoDebtFromFixedSale();
+        syncAutoDebtFromSale();
     });
 
     document.addEventListener('click', (e) => {
@@ -3279,13 +3279,15 @@ function getPosServicesTotal() {
     return getSelectedPosServices().reduce((sum, service) => sum + getPosServiceSalePrice(service), 0);
 }
 
-function getFixedSaleAutoDebtContext() {
+function getSaleAutoDebtContext() {
     const selected = getSelectedPosServices();
     const amountInput = document.getElementById('amount');
     const applyDiscount = document.getElementById('apply-discount');
-    if (!amountInput || selected.length === 0) return { eligible: false };
-    if (selected.some(service => !isFixedPriceService(service))) return { eligible: false };
+    if (!amountInput) return { eligible: false };
     if (applyDiscount?.checked) return { eligible: false };
+
+    const missingVariablePrice = selected.find(service => !isFixedPriceService(service) && getPosServiceSalePrice(service) <= 0);
+    if (missingVariablePrice) return { eligible: false, reason: 'missing_variable_price' };
 
     const serviceTotal = getPosServicesTotal();
     const productTotal = getPosProductTotal();
@@ -3323,14 +3325,14 @@ function resetAutoDebtState({ clearValue = false } = {}) {
     if (helper) helper.textContent = 'El monto ingresado se registrará como deuda pendiente.';
 }
 
-function syncAutoDebtFromFixedSale() {
+function syncAutoDebtFromSale() {
     const checkbox = document.getElementById('is-partial-payment');
     const container = document.getElementById('full-price-container');
     const input = document.getElementById('full-service-price');
     const helper = document.getElementById('partial-payment-helper');
     if (!checkbox || !container || !input) return;
 
-    const ctx = getFixedSaleAutoDebtContext();
+    const ctx = getSaleAutoDebtContext();
     if (!ctx.eligible || ctx.debtAmount <= 0) {
         resetAutoDebtState({ clearValue: true });
         return;
@@ -3345,7 +3347,7 @@ function syncAutoDebtFromFixedSale() {
     input.value = String(Math.round(ctx.debtAmount * 100) / 100);
     input.dataset.autoDebt = '1';
     if (helper) {
-        helper.textContent = `Deuda calculada automáticamente: $${fmt(ctx.debtAmount)}. Total fijo $${fmt(ctx.expectedTotal)} - recibido $${fmt(ctx.receivedAmount)}.`;
+        helper.textContent = `Deuda calculada automáticamente: $${fmt(ctx.debtAmount)}. Total venta $${fmt(ctx.expectedTotal)} - recibido $${fmt(ctx.receivedAmount)}.`;
     }
 }
 
@@ -3703,7 +3705,7 @@ function syncSaleAmountFromFixedService() {
             const baseAmount = selectedServicesTotal > 0 ? selectedServicesTotal : window._chargeBaseAmount;
             amountInput.value = baseAmount + getPosProductTotal();
             refreshPosServicesBreakdown();
-            syncAutoDebtFromFixedSale();
+            syncAutoDebtFromSale();
         }
         return;
     }
@@ -3712,7 +3714,7 @@ function syncSaleAmountFromFixedService() {
     if (amountInput && selectedTotal > 0) {
         amountInput.value = selectedTotal + getPosProductTotal();
         refreshPosServicesBreakdown();
-        syncAutoDebtFromFixedSale();
+        syncAutoDebtFromSale();
         return;
     }
 
@@ -3720,7 +3722,7 @@ function syncSaleAmountFromFixedService() {
     if (amountInput && srv && srv.priceType === 'fijo') {
         amountInput.value = (parseFloat(srv.price) || 0) + getPosProductTotal();
     }
-    syncAutoDebtFromFixedSale();
+    syncAutoDebtFromSale();
 }
 
 function renderPosProducts() {
@@ -3939,7 +3941,7 @@ async function saveTransaction() {
 
         const partialCheckbox = document.getElementById('is-partial-payment');
         const isPartial = partialCheckbox.checked;
-        const isAutoFixedDebt = partialCheckbox.dataset.autoDebt === '1';
+        const isAutoDebt = partialCheckbox.dataset.autoDebt === '1';
         if (isPartial) {
             const debtAmount = parseFloat(document.getElementById('full-service-price').value);
             if (isNaN(debtAmount) || debtAmount <= 0) {
@@ -3947,7 +3949,7 @@ async function saveTransaction() {
                 document.getElementById('btn-save-transaction').disabled = false;
                 return;
             }
-            if (!isAutoFixedDebt && debtAmount >= transactionSchema.amount) {
+            if (!isAutoDebt && debtAmount >= transactionSchema.amount) {
                 showToast('La deuda no puede ser mayor o igual al precio del servicio.', 'error');
                 document.getElementById('btn-save-transaction').disabled = false;
                 return;
@@ -3961,7 +3963,7 @@ async function saveTransaction() {
                 const fmt2 = n => Number(n).toLocaleString('es-UY');
                 addClientLog(currentClient.id, `⚠ DEUDA GENERADA: $${fmt2(debtAmount)}`);
             }
-            if (isAutoFixedDebt) {
+            if (isAutoDebt) {
                 const expectedTotal = parseFloat(partialCheckbox.dataset.expectedTotal) || (transactionSchema.amount + debtAmount);
                 transactionSchema.detail += ` (Generó Deuda automática: ${debtAmount} de total ${expectedTotal})`;
             } else {
