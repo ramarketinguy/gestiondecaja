@@ -287,6 +287,19 @@ body::before {
 .sale-product-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: .6rem; align-items: center; padding: .55rem .7rem; background: rgba(0,0,0,.16); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); font-size: .84rem; }
 .sale-products-total { margin-top: .65rem; text-align: right; color: var(--text-secondary); font-size: .82rem; }
 .sale-products-total strong { color: var(--gold-400); }
+.sale-payment-preview { margin-top: .7rem; padding: .75rem; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: rgba(15,10,24,.52); }
+.sale-payment-preview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem; margin-bottom: .6rem; }
+.sale-payment-preview-grid div { padding: .55rem .65rem; border-radius: var(--radius-sm); background: rgba(255,255,255,.035); }
+.sale-payment-preview span { display: block; color: var(--text-dim); font-size: .68rem; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+.sale-payment-preview strong { display: block; margin-top: .18rem; color: var(--text-primary); font-size: 1rem; }
+.sale-payment-preview-result { display: flex; justify-content: space-between; align-items: center; gap: .75rem; padding: .7rem .75rem; border-radius: var(--radius-sm); border: 1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.04); }
+.sale-payment-preview-result strong { margin: 0; font-size: 1.08rem; }
+.sale-payment-preview-result.is-change { border-color: rgba(74,222,128,.35); background: rgba(34,197,94,.1); }
+.sale-payment-preview-result.is-change strong, .sale-payment-preview-result.is-change span { color: var(--success); }
+.sale-payment-preview-result.is-debt { border-color: rgba(248,113,113,.38); background: rgba(248,113,113,.1); }
+.sale-payment-preview-result.is-debt strong, .sale-payment-preview-result.is-debt span { color: var(--danger); }
+.sale-payment-preview-result.is-even { border-color: rgba(201,168,76,.28); background: rgba(201,168,76,.08); }
+.sale-payment-preview-result.is-even strong, .sale-payment-preview-result.is-even span { color: var(--gold-400); }
 
 /* List styles for widgets */
 .widget-list-item { display: flex; align-items: center; justify-content: space-between; padding: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); background: var(--bg-input); }

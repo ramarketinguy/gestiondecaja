@@ -2725,6 +2725,7 @@ function initPOS() {
             resetPosProducts();
             clearClientSelection();
         }
+        updateSalePaymentPreview();
     });
 
     // Toggle propina
@@ -2767,6 +2768,7 @@ function initPOS() {
             tipMethodSel.value = isDigital ? 'digital' : 'efectivo';
             syncCustomSelect('tip-method');
         }
+        updateSalePaymentPreview();
     });
 
     splitCheckbox.addEventListener('change', () => {
@@ -2798,7 +2800,10 @@ function initPOS() {
     });
 
     const amountInput = document.getElementById('amount');
-    if (amountInput) amountInput.addEventListener('input', syncAutoDebtFromSale);
+    if (amountInput) amountInput.addEventListener('input', () => {
+        syncAutoDebtFromSale();
+        updateSalePaymentPreview();
+    });
 
     const serviceSelect = document.getElementById('service');
     // Escuchar cambios de servicio para autocompletar precio si es fijo
@@ -3325,6 +3330,66 @@ function resetAutoDebtState({ clearValue = false } = {}) {
     if (helper) helper.textContent = 'El monto ingresado se registrará como deuda pendiente.';
 }
 
+function getSalePaymentPreviewContext() {
+    const preview = document.getElementById('sale-payment-preview');
+    const amountInput = document.getElementById('amount');
+    const isIncome = document.getElementById('transaction-type-toggle')?.checked;
+    const method = document.getElementById('payment-method')?.value;
+    if (!preview || !amountInput || !isIncome || method === 'seña') return { visible: false };
+
+    const selected = getSelectedPosServices();
+    const missingVariablePrice = selected.find(service => !isFixedPriceService(service) && getPosServiceSalePrice(service) <= 0);
+    if (missingVariablePrice) return { visible: false };
+
+    const total = getPosServicesTotal() + getPosProductTotal();
+    const paid = parseFloat(amountInput.value);
+    if (total <= 0 || Number.isNaN(paid) || paid < 0) return { visible: false };
+
+    return {
+        visible: true,
+        total,
+        paid,
+        difference: paid - total
+    };
+}
+
+function updateSalePaymentPreview() {
+    const preview = document.getElementById('sale-payment-preview');
+    if (!preview) return;
+
+    const totalEl = document.getElementById('sale-preview-total');
+    const paidEl = document.getElementById('sale-preview-paid');
+    const resultEl = document.getElementById('sale-preview-result');
+    const labelEl = document.getElementById('sale-preview-label');
+    const amountEl = document.getElementById('sale-preview-amount');
+    const ctx = getSalePaymentPreviewContext();
+
+    if (!ctx.visible) {
+        preview.classList.add('hidden');
+        return;
+    }
+
+    preview.classList.remove('hidden');
+    if (totalEl) totalEl.textContent = `$${fmt(ctx.total)}`;
+    if (paidEl) paidEl.textContent = `$${fmt(ctx.paid)}`;
+
+    const diff = Math.round(ctx.difference * 100) / 100;
+    resultEl?.classList.remove('is-change', 'is-debt', 'is-even');
+    if (diff > 0) {
+        resultEl?.classList.add('is-change');
+        if (labelEl) labelEl.textContent = 'Cambio a devolver';
+        if (amountEl) amountEl.textContent = `$${fmt(diff)}`;
+    } else if (diff < 0) {
+        resultEl?.classList.add('is-debt');
+        if (labelEl) labelEl.textContent = 'Deuda generada';
+        if (amountEl) amountEl.textContent = `$${fmt(Math.abs(diff))}`;
+    } else {
+        resultEl?.classList.add('is-even');
+        if (labelEl) labelEl.textContent = 'Pago exacto';
+        if (amountEl) amountEl.textContent = '$0';
+    }
+}
+
 function syncAutoDebtFromSale() {
     const checkbox = document.getElementById('is-partial-payment');
     const container = document.getElementById('full-price-container');
@@ -3335,6 +3400,7 @@ function syncAutoDebtFromSale() {
     const ctx = getSaleAutoDebtContext();
     if (!ctx.eligible || ctx.debtAmount <= 0) {
         resetAutoDebtState({ clearValue: true });
+        updateSalePaymentPreview();
         return;
     }
 
@@ -3349,6 +3415,7 @@ function syncAutoDebtFromSale() {
     if (helper) {
         helper.textContent = `Deuda calculada automáticamente: $${fmt(ctx.debtAmount)}. Total venta $${fmt(ctx.expectedTotal)} - recibido $${fmt(ctx.receivedAmount)}.`;
     }
+    updateSalePaymentPreview();
 }
 
 function refreshPosServicesBreakdown() {
@@ -4151,6 +4218,7 @@ async function saveTransaction() {
                 
                 resetPosProducts();
                 resetPosServices();
+                updateSalePaymentPreview();
                 const paymentMethodEl = document.getElementById('payment-method');
                 if (paymentMethodEl) {
                     paymentMethodEl.value = 'efectivo';

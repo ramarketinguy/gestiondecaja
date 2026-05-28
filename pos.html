@@ -21,7 +21,7 @@
     <!-- Supabase -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     
-    <link rel="stylesheet" href="pos.css?v=202605200004">
+    <link rel="stylesheet" href="pos.css?v=202605280002">
 </head>
 <body>
 
@@ -362,6 +362,22 @@
                             <div class="input-wrap">
                                 <i data-lucide="dollar-sign"></i>
                                 <input type="number" id="amount" placeholder="0" min="0" step="1" onwheel="this.blur()" required>
+                            </div>
+                            <div id="sale-payment-preview" class="sale-payment-preview hidden" aria-live="polite">
+                                <div class="sale-payment-preview-grid">
+                                    <div>
+                                        <span>Total venta</span>
+                                        <strong id="sale-preview-total">$0</strong>
+                                    </div>
+                                    <div>
+                                        <span>Recibido</span>
+                                        <strong id="sale-preview-paid">$0</strong>
+                                    </div>
+                                </div>
+                                <div id="sale-preview-result" class="sale-payment-preview-result">
+                                    <span id="sale-preview-label">Sin cambio ni deuda</span>
+                                    <strong id="sale-preview-amount">$0</strong>
+                                </div>
                             </div>
                         </div>
 
@@ -1671,7 +1687,7 @@
     <script src="auth.js?v=202605280001"></script>
     <script src="supabase-helpers.js?v=202605151230"></script>
     <script src="clients.js?v=202604260900"></script>
-    <script src="pos.js?v=202605280001"></script>
+    <script src="pos.js?v=202605280002"></script>
     <script src="pos.dashboard.js?v=202605200004"></script>
     <script src="pos.services.js?v=202604260900"></script>
     <script src="pos.config.js?v=202605140600"></script>
