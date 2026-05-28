@@ -287,6 +287,38 @@ body::before {
 .sale-product-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: .6rem; align-items: center; padding: .55rem .7rem; background: rgba(0,0,0,.16); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); font-size: .84rem; }
 .sale-products-total { margin-top: .65rem; text-align: right; color: var(--text-secondary); font-size: .82rem; }
 .sale-products-total strong { color: var(--gold-400); }
+/* Inline products block (integrated with services) */
+.pos-products-inline {
+    margin-top: 1rem;
+    padding: 0.75rem 0.8rem;
+    background: rgba(201,168,76,0.04);
+    border: 1px solid rgba(201,168,76,0.15);
+    border-radius: var(--radius-sm);
+}
+.pos-products-inline-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--gold-400);
+    margin-bottom: 0.55rem;
+}
+.pos-products-inline-header svg {
+    width: 14px;
+    height: 14px;
+}
+.pos-products-inline-controls {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+.pos-products-inline-controls .sale-product-qty {
+    width: 72px;
+    flex-shrink: 0;
+}
 .sale-payment-preview { margin-top: .7rem; padding: .75rem; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: rgba(15,10,24,.52); }
 .sale-payment-preview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem; margin-bottom: .6rem; }
 .sale-payment-preview-grid div { padding: .55rem .65rem; border-radius: var(--radius-sm); background: rgba(255,255,255,.035); }

@@ -355,6 +355,27 @@
                                     <span id="pos-services-breakdown-total">$0</span>
                                 </div>
                             </div>
+                            <!-- Productos inline - integrados con servicios -->
+                            <div class="pos-products-inline" id="pos-products-inline">
+                                <div class="pos-products-inline-header">
+                                    <i data-lucide="shopping-bag"></i>
+                                    <span>Agregar producto</span>
+                                </div>
+                                <div class="pos-products-inline-controls">
+                                    <div class="input-wrap sale-product-qty">
+                                        <i data-lucide="hash"></i>
+                                        <input type="number" id="pos-product-qty" min="1" step="1" value="1" title="Cantidad">
+                                    </div>
+                                    <div class="input-wrap" style="flex:1;">
+                                        <i data-lucide="package"></i>
+                                        <select id="pos-product-select" class="custom-select">
+                                            <option value="" disabled selected style="display:none">Seleccione producto...</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div id="pos-products-list" class="sale-products-list"></div>
+                                <div class="sale-products-total">Total productos: <strong id="pos-products-total">$0</strong></div>
+                            </div>
                         </div>
 
                         <div class="form-group">
@@ -406,31 +427,6 @@
                         </div>
                     </div>
 
-                    <!-- Productos vendidos junto al servicio -->
-                    <div id="sale-products-section" style="padding: 0 1.5rem 1rem;">
-                        <div class="form-alert" style="margin:0;background:rgba(201,168,76,0.06);border-color:rgba(201,168,76,0.18);align-items:flex-start;">
-                            <i data-lucide="shopping-bag"></i>
-                            <div style="flex:1;">
-                                <div style="font-weight:700;margin-bottom:8px;">Productos</div>
-                                <p style="margin:0 0 10px;font-size:0.78rem;color:var(--text-dim);">Si la clienta lleva productos, agregalos aca. El monto recibido debe incluir servicio + productos.</p>
-                                <div class="sale-products-controls">
-                                    <div class="input-wrap">
-                                        <i data-lucide="package"></i>
-                                        <select id="pos-product-select" class="custom-select">
-                                            <option value="" disabled selected style="display:none">Seleccione producto...</option>
-                                        </select>
-                                    </div>
-                                    <div class="input-wrap sale-product-qty">
-                                        <i data-lucide="hash"></i>
-                                        <input type="number" id="pos-product-qty" min="1" step="1" value="1">
-                                    </div>
-                                    <button type="button" class="btn btn-ghost btn-sm" id="btn-add-product-to-sale"><i data-lucide="plus"></i> Agregar</button>
-                                </div>
-                                <div id="pos-products-list" class="sale-products-list"></div>
-                                <div class="sale-products-total">Total productos: <strong id="pos-products-total">$0</strong></div>
-                            </div>
-                        </div>
-                    </div>
 
                     <!-- Campos de Egreso (ocultos inicialmente) -->
                     <div class="form-grid hidden" id="expense-fields">

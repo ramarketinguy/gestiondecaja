@@ -2697,7 +2697,7 @@ function initPOS() {
         const tipSectionEl = document.getElementById('tip-section');
         const tipCheckboxEl = document.getElementById('is-tip');
         const tipFieldsEl = document.getElementById('tip-fields');
-        const saleProductsSectionEl = document.getElementById('sale-products-section');
+        const saleProductsSectionEl = document.getElementById('pos-products-inline');
         if (toggle.checked) {
             incomeFields.classList.remove('hidden');
             expenseFields.classList.add('hidden');
@@ -2809,8 +2809,7 @@ function initPOS() {
     // Escuchar cambios de servicio para autocompletar precio si es fijo
     serviceSelect.addEventListener('change', addPosServiceFromSelect);
 
-    const addProductBtn = document.getElementById('btn-add-product-to-sale');
-    if (addProductBtn) addProductBtn.addEventListener('click', addProductToSale);
+
 
     const depositBtn = document.getElementById('btn-start-deposit');
     if (depositBtn) depositBtn.addEventListener('click', () => startDepositEntry());
@@ -2889,12 +2888,9 @@ function updateFormSelects() {
         if (prevProduct && db.products.some(p => String(p.id) === String(prevProduct))) {
             productSelect.value = prevProduct;
         }
-        if (!productSelect.dataset.stockBound) {
-            productSelect.dataset.stockBound = '1';
-            productSelect.addEventListener('change', () => {
-                const product = db.products.find(p => String(p.id) === String(productSelect.value));
-                if (product && hasControlledStock(product) && (parseFloat(product.stock) || 0) <= 0) notifyLowStock(product, 0);
-            });
+        if (!productSelect.dataset.changeBound) {
+            productSelect.dataset.changeBound = '1';
+            productSelect.addEventListener('change', addProductToSale);
         }
     }
 
@@ -3700,7 +3696,7 @@ function refreshClientDepositIndicators(clientId) {
 function setDepositEntryMode(enabled) {
     const method = document.getElementById('payment-method');
     const serviceSelect = document.getElementById('service');
-    const saleProductsSection = document.getElementById('sale-products-section');
+    const saleProductsSection = document.getElementById('pos-products-inline');
     const partialSection = document.getElementById('partial-payment-section');
     const tipSection = document.getElementById('tip-section');
     const splitToggleRow = document.getElementById('split-toggle-row');
