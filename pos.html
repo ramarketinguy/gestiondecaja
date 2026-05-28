@@ -325,13 +325,13 @@
 
                 <form id="pos-form" autocomplete="off">
                     <div class="form-grid" id="income-fields">
-                        <div class="form-group" style="position: relative;">
+                        <div class="form-group">
                             <label for="client-name">Cliente (Buscar o crear)</label>
                             <div class="input-wrap">
                                 <i data-lucide="search"></i>
                                 <input type="text" id="client-name" placeholder="Ej: María González" required>
+                                <div class="autocomplete-dropdown" id="client-autocomplete"></div>
                             </div>
-                            <div class="autocomplete-dropdown" id="client-autocomplete"></div>
                         </div>
 
                         <div class="form-group" style="position: relative;">
@@ -474,6 +474,11 @@
                                     <label class="seña-method-opt">
                                         <input type="radio" name="deposit_mode" value="permanent"> Permanente
                                     </label>
+                                </div>
+                                <div style="font-weight:600; margin:14px 0 8px;">Fecha de la seña</div>
+                                <div class="input-wrap" style="width: 100%; max-width: 250px; margin-bottom: 12px;">
+                                    <i data-lucide="calendar"></i>
+                                    <input type="date" id="deposit-date-input" required>
                                 </div>
                                 <p style="margin:8px 0 0; font-size: 0.8rem; color:var(--text-dim);">Próximo servicio se descuenta automáticamente. Permanente queda como saldo manual a favor.</p>
                             </div>
@@ -924,13 +929,13 @@
             </div>
             <div class="modal-body">
                 <form id="appointment-form">
-                    <div class="form-group" style="position: relative;">
+                    <div class="form-group">
                         <label>Buscar Clienta (Requerido)</label>
                         <div class="input-wrap">
                             <i data-lucide="search"></i>
                             <input type="text" id="apt-client-name" placeholder="Ej: Marcela Silva" required autocomplete="off">
+                            <div class="autocomplete-dropdown" id="apt-client-dropdown"></div>
                         </div>
-                        <div class="autocomplete-dropdown" id="apt-client-dropdown"></div>
                     </div>
                     
                     <div class="form-alert hidden" id="apt-client-alert" style="margin: 1rem 0;">

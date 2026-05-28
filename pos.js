@@ -3749,6 +3749,14 @@ function startDepositEntry(client = null) {
         method.dispatchEvent(new Event('change'));
         syncCustomSelect('payment-method');
     }
+    const depositDateInput = document.getElementById('deposit-date-input');
+    if (depositDateInput) {
+        const today = new Date();
+        const yyyy = today.getFullYear();
+        const mm = String(today.getMonth() + 1).padStart(2, '0');
+        const dd = String(today.getDate()).padStart(2, '0');
+        depositDateInput.value = `${yyyy}-${mm}-${dd}`;
+    }
     document.getElementById('amount')?.focus();
     showToast('Modo seña listo: elegí la clienta y el monto.', 'info');
 }
@@ -3886,8 +3894,19 @@ async function saveTransaction() {
 
     document.getElementById('btn-save-transaction').disabled = true;
 
+    let txDate = new Date();
+    if (isIncome && document.getElementById('payment-method')?.value === 'seña') {
+        const depositDateInput = document.getElementById('deposit-date-input');
+        if (depositDateInput && depositDateInput.value) {
+            const [year, month, day] = depositDateInput.value.split('-').map(Number);
+            txDate.setFullYear(year);
+            txDate.setMonth(month - 1);
+            txDate.setDate(day);
+        }
+    }
+
     const transactionSchema = {
-        transaction_date: new Date().toISOString(),
+        transaction_date: txDate.toISOString(),
         is_income: isIncome,
         amount: amount,
         client_name: '',
