@@ -180,6 +180,8 @@ Tablas necesarias:
 
 Además de RLS, Supabase requiere `GRANT` explícitos para que las tablas sean accesibles desde la Data API. Violet usa sesión autenticada, por eso las tablas del sistema deben tener permisos para el rol `authenticated`. No otorgar permisos a `anon` salvo que una tabla sea realmente pública.
 
+Ver tambien [SEGURIDAD_Y_BACKUPS.md](SEGURIDAD_Y_BACKUPS.md) para el checklist de seguridad, backups diarios y recuperacion.
+
 Ejemplo:
 ```sql
 -- Los usuarios solo ven sus propios datos

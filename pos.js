@@ -1648,7 +1648,7 @@ function initAptClientAutocomplete() {
         const createDiv = document.createElement('div');
         createDiv.className = 'autocomplete-item';
         createDiv.style.cssText = 'color:var(--violet-300); font-weight:600; border-top:1px solid var(--border)';
-        createDiv.innerHTML = `<span class="ac-name">+ Crear nueva clienta "${typedName}"</span>`;
+        createDiv.innerHTML = `<span class="ac-name">+ Crear nueva clienta "${escapeHtml(typedName)}"</span>`;
         createDiv.addEventListener('click', () => {
             dropdown.style.display = 'none';
             // Abrir modal de clienta con nombre pre-cargado, luego volver a la agenda
@@ -1661,7 +1661,7 @@ function initAptClientAutocomplete() {
                 aptCurrentClient = newClient;
                 input.value = newClient.name;
                 alertBox.classList.remove('hidden');
-                alertBox.innerHTML = `<div class="badge badge-border" style="color:var(--success);border-color:var(--success)">✓ Clienta creada: ${newClient.name}</div>`;
+                alertBox.innerHTML = `<div class="badge badge-border" style="color:var(--success);border-color:var(--success)">✓ Clienta creada: ${escapeHtml(newClient.name)}</div>`;
                 _pendingAptClientName = null;
             };
         });
@@ -5244,15 +5244,30 @@ function renderClientFiles(clientId) {
     }
     
     files.forEach(f => {
-        const isImg = /\.(jpg|jpeg|png|webp|gif)$/i.test(f.url);
-        list.innerHTML += `
-            <div class="client-file-item" onclick="window.open('${f.url}', '_blank')">
-                ${isImg ? `<img src="${f.url}" alt="${f.name}">` : `<i data-lucide="file-text" class="file-icon"></i>`}
-                <button class="btn-delete-file" onclick="event.stopPropagation(); deleteClientFile('${f.id}')">
-                    <i data-lucide="trash-2" style="width:12px;height:12px"></i>
-                </button>
-            </div>
-        `;
+        const url = String(f.url || '');
+        const isImg = /\.(jpg|jpeg|png|webp|gif)$/i.test(url);
+        const item = document.createElement('div');
+        item.className = 'client-file-item';
+        item.addEventListener('click', () => window.open(url, '_blank', 'noopener'));
+
+        if (isImg) {
+            const img = document.createElement('img');
+            img.src = url;
+            img.alt = f.name || 'Archivo';
+            item.appendChild(img);
+        } else {
+            item.innerHTML = '<i data-lucide="file-text" class="file-icon"></i>';
+        }
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn-delete-file';
+        delBtn.innerHTML = '<i data-lucide="trash-2" style="width:12px;height:12px"></i>';
+        delBtn.addEventListener('click', (event) => {
+            event.stopPropagation();
+            deleteClientFile(f.id);
+        });
+        item.appendChild(delBtn);
+        list.appendChild(item);
     });
     refreshIcons();
 }
@@ -6493,8 +6508,8 @@ function renderBlockedSlots() {
         const li = document.createElement('li');
         li.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px;border-bottom:1px solid var(--border);';
         const emp = b.employeeId ? db.employees.find(e => e.id == b.employeeId) : null;
-        const scope = emp ? `👤 ${emp.name}` : '🏪 Todo el local';
-        li.innerHTML = `<span style="font-size:.85rem;">${b.date} · ${b.start} - ${b.end} · <span style="color:var(--violet-300);">${scope}</span>${b.reason ? ' · ' + b.reason : ''}</span>
+        const scope = emp ? `👤 ${escapeHtml(emp.name)}` : '🏪 Todo el local';
+        li.innerHTML = `<span style="font-size:.85rem;">${escapeHtml(b.date)} · ${escapeHtml(b.start)} - ${escapeHtml(b.end)} · <span style="color:var(--violet-300);">${scope}</span>${b.reason ? ' · ' + escapeHtml(b.reason) : ''}</span>
                         <button class="btn-icon" data-idx="${idx}" title="Eliminar"><i data-lucide="trash-2" style="width:14px;height:14px;"></i></button>`;
         li.querySelector('button').addEventListener('click', () => {
             const c = getBusinessConfig();

@@ -259,8 +259,8 @@ function validatePassword(password) {
     const errors = [];
     if (!password) {
         errors.push('La contraseña es obligatoria');
-    } else if (password.length < 6) {
-        errors.push('La contraseña debe tener al menos 6 caracteres');
+    } else if (password.length < 10) {
+        errors.push('La contraseña debe tener al menos 10 caracteres');
     }
     return errors;
 }

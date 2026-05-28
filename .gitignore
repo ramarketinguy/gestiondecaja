@@ -5,3 +5,6 @@ Thumbs.db
 *.log
 node_modules/
 .env
+backups/
+*.sql.gz
+*.tar.gz

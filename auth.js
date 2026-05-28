@@ -175,8 +175,8 @@ async function signup(email, password, fullName = '') {
             return false;
         }
 
-        if (password.length < 6) {
-            showToast('La contraseña debe tener al menos 6 caracteres', 'error');
+        if (password.length < 10) {
+            showToast('La contraseña debe tener al menos 10 caracteres', 'error');
             setState('ui.isLoading', false);
             return false;
         }
@@ -341,8 +341,8 @@ async function updatePassword(newPassword) {
     try {
         setState('ui.isLoading', true);
 
-        if (newPassword.length < 6) {
-            showToast('La contraseña debe tener al menos 6 caracteres', 'error');
+        if (newPassword.length < 10) {
+            showToast('La contraseña debe tener al menos 10 caracteres', 'error');
             setState('ui.isLoading', false);
             return false;
         }

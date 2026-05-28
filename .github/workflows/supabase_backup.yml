@@ -2,38 +2,64 @@ name: Supabase Daily Backup
 
 on:
   schedule:
-    # Ejecutar todos los días a las 03:00 AM UTC (00:00 AM hora Uruguay/Argentina)
+    # Ejecutar todos los dias a las 03:00 UTC (00:00 Uruguay/Argentina).
     - cron: '0 3 * * *'
-  workflow_dispatch: # Permite ejecutar el workflow manualmente desde GitHub
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   backup:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-        
+
       - name: Set up Supabase CLI
         uses: supabase/setup-cli@v1
         with:
           version: latest
-          
+
       - name: Create backups directory
         run: mkdir -p backups
-        
-      - name: Dump Database
+
+      - name: Resolve database URL
+        id: db
         env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
-          supabase db dump --db-url "postgresql://postgres:${SUPABASE_DB_PASSWORD}@db.${SUPABASE_PROJECT_REF}.supabase.co:5432/postgres" -f backups/daily_backup.sql
-          
-      - name: Commit and push changes
+          if [ -n "$SUPABASE_DB_URL" ]; then
+            echo "db_url=$SUPABASE_DB_URL" >> "$GITHUB_OUTPUT"
+          elif [ -n "$SUPABASE_DB_PASSWORD" ] && [ -n "$SUPABASE_PROJECT_REF" ]; then
+            echo "db_url=postgresql://postgres:${SUPABASE_DB_PASSWORD}@db.${SUPABASE_PROJECT_REF}.supabase.co:5432/postgres" >> "$GITHUB_OUTPUT"
+          else
+            echo "Falta configurar SUPABASE_DB_URL o SUPABASE_DB_PASSWORD + SUPABASE_PROJECT_REF en GitHub Secrets." >&2
+            exit 1
+          fi
+
+      - name: Dump roles, schema, and data
+        env:
+          SUPABASE_DB_URL: ${{ steps.db.outputs.db_url }}
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add backups/daily_backup.sql
-          # Si no hay cambios (la BD es igual), el commit fallará, así que ignoramos el error
-          git commit -m "chore: backup automático diario de la base de datos" || echo "No hay cambios para respaldar"
-          git push
+          supabase db dump --db-url "$SUPABASE_DB_URL" -f backups/roles.sql --role-only
+          supabase db dump --db-url "$SUPABASE_DB_URL" -f backups/schema.sql
+          supabase db dump --db-url "$SUPABASE_DB_URL" -f backups/data.sql --data-only --use-copy
+
+      - name: Package backup
+        id: package
+        run: |
+          stamp="$(date -u +'%Y-%m-%dT%H-%M-%SZ')"
+          tar -czf "violet-supabase-backup-${stamp}.tar.gz" backups
+          echo "artifact_name=violet-supabase-backup-${stamp}" >> "$GITHUB_OUTPUT"
+          echo "artifact_path=violet-supabase-backup-${stamp}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: ${{ steps.package.outputs.artifact_path }}
+          retention-days: 30
