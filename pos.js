@@ -167,7 +167,7 @@ function getAppointmentDuration(apt) {
     const services = getAppointmentServices(apt);
     const summed = services.reduce((total, srvRef) => {
         const srv = db.services.find(s => String(s.id) === String(srvRef.id || srvRef.service_id) || s.name === srvRef.name);
-        return total + (parseInt(srv?.duration, 10) || 0);
+        return total + ((parseInt(srv?.duration, 10) || 0) * getServiceSelectionQty(srvRef));
     }, 0);
     return summed > 0 ? summed : 60;
 }
@@ -1508,6 +1508,8 @@ function openAgendarModal(preselectedDate = null, preselectedTime = null) {
         aptSel.value = '';
         syncCustomSelect('apt-service');
     }
+    const aptQty = document.getElementById('apt-service-qty');
+    if (aptQty) aptQty.value = '1';
     renderAppointmentServiceSelection();
     const repeatSel = document.getElementById('apt-repeat');
     if (repeatSel) { repeatSel.value = 'none'; syncCustomSelect('apt-repeat'); }
@@ -1535,6 +1537,8 @@ function closeAgendarModal() {
     // Reset visual del custom select de servicio
     const aptSel = document.getElementById('apt-service');
     if (aptSel) { aptSel.value = ''; syncCustomSelect('apt-service'); }
+    const aptQty = document.getElementById('apt-service-qty');
+    if (aptQty) aptQty.value = '1';
     appointmentSelectedServiceIds = [];
     renderAppointmentServiceSelection();
     // Restaurar título del modal
@@ -1554,8 +1558,13 @@ async function editAppointment(id) {
     const aptSrv = document.getElementById('apt-service');
     const serviceRefs = getAppointmentServices(apt);
     appointmentSelectedServiceIds = serviceRefs
-        .map(ref => db.services.find(s => String(s.id) === String(ref.id || ref.service_id) || s.name === ref.name)?.id)
+        .map(ref => {
+            const service = db.services.find(s => String(s.id) === String(ref.id || ref.service_id) || s.name === ref.name);
+            return service ? { id: service.id, qty: getServiceSelectionQty(ref) } : null;
+        })
         .filter(Boolean);
+    const aptQty = document.getElementById('apt-service-qty');
+    if (aptQty) aptQty.value = '1';
     if (aptSrv) { aptSrv.value = ''; syncCustomSelect('apt-service'); }
     renderAppointmentServiceSelection();
     const endInput = document.getElementById('apt-end-time');
@@ -1675,34 +1684,70 @@ function initAptClientAutocomplete() {
 
 function getSelectedAppointmentServices() {
     return appointmentSelectedServiceIds
-        .map(id => db.services.find(s => String(s.id) === String(id)))
+        .map(ref => {
+            const id = typeof ref === 'object' ? (ref.id || ref.service_id) : ref;
+            const service = db.services.find(s => String(s.id) === String(id));
+            const qty = getServiceSelectionQty(ref);
+            return service ? { ...service, qty } : (typeof ref === 'object' ? { ...ref, qty } : null);
+        })
         .filter(Boolean);
+}
+
+function getServiceSelectionQty(ref) {
+    const rawQty = typeof ref === 'object' ? ref.qty : 1;
+    const qty = parseFloat(rawQty);
+    return !Number.isNaN(qty) && qty > 0 ? qty : 1;
+}
+
+function getServiceSelectionUnitCount(services) {
+    return services.reduce((sum, service) => sum + getServiceSelectionQty(service), 0);
 }
 
 function addAppointmentServiceFromSelect() {
     const select = document.getElementById('apt-service');
+    const qtyInput = document.getElementById('apt-service-qty');
     const serviceId = select?.value;
+    const qty = parseFloat(qtyInput?.value) || 1;
     const service = db.services.find(s => String(s.id) === String(serviceId));
     if (!service) return;
+    if (qty <= 0) return showToast('Ingrese una cantidad valida.', 'error');
 
-    if (!appointmentSelectedServiceIds.some(id => String(id) === String(service.id))) {
-        appointmentSelectedServiceIds.push(service.id);
+    const existing = appointmentSelectedServiceIds.find(ref => {
+        const refId = typeof ref === 'object' ? (ref.id || ref.service_id) : ref;
+        return String(refId) === String(service.id);
+    });
+    if (existing) {
+        if (typeof existing === 'object') existing.qty = getServiceSelectionQty(existing) + qty;
+        else {
+            appointmentSelectedServiceIds = appointmentSelectedServiceIds.map(ref => (
+                String(ref) === String(service.id) ? { id: service.id, qty: 1 + qty } : ref
+            ));
+        }
+    } else {
+        appointmentSelectedServiceIds.push({ id: service.id, qty });
     }
 
     select.value = '';
+    if (qtyInput) qtyInput.value = '1';
     syncCustomSelect('apt-service');
     renderAppointmentServiceSelection();
-    if (appointmentSelectedServiceIds.length === 1 && !service.duration) openServiceDurationModal(service);
+    if (getSelectedAppointmentServices().length === 1 && !service.duration) openServiceDurationModal(service);
 }
 
 function removeAppointmentService(serviceId) {
-    appointmentSelectedServiceIds = appointmentSelectedServiceIds.filter(id => String(id) !== String(serviceId));
+    appointmentSelectedServiceIds = appointmentSelectedServiceIds.filter(ref => {
+        const refId = typeof ref === 'object' ? (ref.id || ref.service_id) : ref;
+        return String(refId) !== String(serviceId);
+    });
     renderAppointmentServiceSelection();
 }
 
 function formatServiceSelectionLabel(service) {
     const duration = parseInt(service?.duration, 10);
-    return `${service?.name || 'Servicio'}${duration ? ` (${duration} min)` : ''}`;
+    const qty = getServiceSelectionQty(service);
+    const qtyLabel = qty > 1 ? ` x${fmt(qty)}` : '';
+    const durationLabel = duration ? ` (${fmt(duration * qty)} min)` : '';
+    return `${service?.name || 'Servicio'}${qtyLabel}${durationLabel}`;
 }
 
 function renderAppointmentServiceSelection() {
@@ -1723,7 +1768,7 @@ function renderAppointmentServiceSelection() {
         `).join('');
     }
 
-    const needsManualWindow = selected.length > 1;
+    const needsManualWindow = getServiceSelectionUnitCount(selected) > 1;
     if (manualWrap) manualWrap.classList.toggle('hidden', !needsManualWindow);
     if (!needsManualWindow && endInput) endInput.value = '';
 
@@ -1907,17 +1952,24 @@ async function saveAppointment() {
 
     const aptEmployeeId = document.getElementById('apt-employee')?.value || null;
     const selectedServices = getSelectedAppointmentServices();
-    const serviceVal = selectedServices.map(s => s.name).join(' + ');
+    const serviceVal = selectedServices.map(s => {
+        const qty = getServiceSelectionQty(s);
+        return qty > 1 ? `${s.name} x${fmt(qty)}` : s.name;
+    }).join(' + ');
     const servicePayload = selectedServices.map(s => ({
         id: s.id,
         name: s.name,
-        duration: s.duration ? parseInt(s.duration, 10) : null
+        qty: getServiceSelectionQty(s),
+        duration: s.duration ? parseInt(s.duration, 10) : null,
+        price: isFixedPriceService(s) ? (parseFloat(s.price) || 0) : null,
+        total: isFixedPriceService(s) ? ((parseFloat(s.price) || 0) * getServiceSelectionQty(s)) : null
     }));
     const manualEndTime = document.getElementById('apt-end-time')?.value || '';
-    let duration = selectedServices.reduce((sum, s) => sum + (parseInt(s.duration, 10) || 0), 0);
+    const selectedServiceUnits = getServiceSelectionUnitCount(selectedServices);
+    let duration = selectedServices.reduce((sum, s) => sum + ((parseInt(s.duration, 10) || 0) * getServiceSelectionQty(s)), 0);
     let endTime = '';
 
-    if (selectedServices.length > 1) {
+    if (selectedServiceUnits > 1) {
         const manualDuration = minutesBetweenTimes(timeInput, manualEndTime);
         if (!manualDuration) {
             showToast('Para mas de un servicio, indique la hora de fin del turno.', 'error');
@@ -2750,16 +2802,46 @@ function initPOS() {
     const splitCheckbox  = document.getElementById('is-split-payment');
 
     methodSelectNative.addEventListener('change', (e) => {
+        const amountInput = document.getElementById('amount');
+        const tipSectionEl = document.getElementById('tip-section');
+        const tipCheckboxEl = document.getElementById('is-tip');
+        const tipFieldsEl = document.getElementById('tip-fields');
         if (e.target.value === 'seña') {
             señaMethodRow.classList.remove('hidden');
             splitToggleRow.classList.add('hidden');
             splitSection.classList.add('hidden');
             splitCheckbox.checked = false;
             setDepositEntryMode(true);
+            if (amountInput) {
+                amountInput.disabled = false;
+                amountInput.required = true;
+            }
+            if (tipSectionEl) tipSectionEl.classList.remove('hidden');
+        } else if (e.target.value === 'deuda') {
+            señaMethodRow.classList.add('hidden');
+            splitToggleRow.classList.add('hidden');
+            splitSection.classList.add('hidden');
+            splitCheckbox.checked = false;
+            if (tipSectionEl) tipSectionEl.classList.add('hidden');
+            if (tipCheckboxEl) tipCheckboxEl.checked = false;
+            if (tipFieldsEl) tipFieldsEl.classList.add('hidden');
+            setDepositEntryMode(false);
+            if (amountInput) {
+                amountInput.value = '0';
+                amountInput.disabled = true;
+                amountInput.required = false;
+            }
+            syncAutoDebtFromSale();
         } else {
             señaMethodRow.classList.add('hidden');
             splitToggleRow.classList.remove('hidden');
             setDepositEntryMode(false);
+            if (amountInput) {
+                amountInput.disabled = false;
+                amountInput.required = true;
+            }
+            if (tipSectionEl) tipSectionEl.classList.remove('hidden');
+            resetAutoDebtState({ clearValue: true });
         }
         // Auto-sincronizar método de propina con el del servicio
         const tipMethodSel = document.getElementById('tip-method');
@@ -3265,7 +3347,7 @@ function getSelectedPosServices() {
     return posSelectedServices
         .map(ref => {
             const service = db.services.find(s => String(s.id) === String(ref.id));
-            return service ? { ...service, salePrice: ref.salePrice, priceType: ref.priceType || service.priceType || service.price_type } : ref;
+            return service ? { ...service, salePrice: ref.salePrice, qty: ref.qty, priceType: ref.priceType || service.priceType || service.price_type } : ref;
         })
         .filter(Boolean);
 }
@@ -3276,8 +3358,23 @@ function getPosServiceSalePrice(service) {
     return isFixedPriceService(service) ? (parseFloat(service?.price) || 0) : 0;
 }
 
+function getPosServiceQty(service) {
+    const qty = parseFloat(service?.qty);
+    return !Number.isNaN(qty) && qty > 0 ? qty : 1;
+}
+
+function getPosServiceLineTotal(service) {
+    return getPosServiceSalePrice(service) * getPosServiceQty(service);
+}
+
+function formatPosServiceDetailName(service) {
+    const name = service?.name || 'Servicio';
+    const qty = getPosServiceQty(service);
+    return qty > 1 ? `${name} x${fmt(qty)}` : name;
+}
+
 function getPosServicesTotal() {
-    return getSelectedPosServices().reduce((sum, service) => sum + getPosServiceSalePrice(service), 0);
+    return getSelectedPosServices().reduce((sum, service) => sum + getPosServiceLineTotal(service), 0);
 }
 
 function getSaleAutoDebtContext() {
@@ -3422,8 +3519,8 @@ function refreshPosServicesBreakdown() {
     const selected = getSelectedPosServices();
     breakdownList.innerHTML = selected.map(service => `
         <div style="display:flex; justify-content:space-between; padding:3px 0; color:var(--text-primary);">
-            <span style="font-weight:500;">${escapeHtml(service.name || 'Servicio')}</span>
-            <span style="font-weight:700; color:var(--success);">$${fmt(getPosServiceSalePrice(service))}</span>
+            <span style="font-weight:500;">${escapeHtml(service.name || 'Servicio')}${getPosServiceQty(service) > 1 ? ` x${fmt(getPosServiceQty(service))}` : ''}</span>
+            <span style="font-weight:700; color:var(--success);">$${fmt(getPosServiceLineTotal(service))}</span>
         </div>
     `).join('');
     if (breakdownTotal) breakdownTotal.textContent = `$${fmt(getPosServicesTotal())}`;
@@ -3438,14 +3535,17 @@ function renderPosServiceSelection() {
     } else {
         list.innerHTML = selected.map(service => {
             const price = getPosServiceSalePrice(service);
+            const qty = getPosServiceQty(service);
+            const total = getPosServiceLineTotal(service);
             const needsManualPrice = !isFixedPriceService(service);
-            const fixedPriceLabel = price ? ` - $${fmt(price)}` : '';
+            const qtyLabel = qty > 1 ? ` x${fmt(qty)}` : '';
+            const fixedPriceLabel = price ? ` - $${fmt(total)}` : '';
             const serviceKey = getPosServiceKey(service);
             const safeServiceKey = escapeHtml(serviceKey);
             const safeServiceName = escapeHtml(service.name || 'Servicio');
             return `
                 <div class="apt-service-chip">
-                    <span>${safeServiceName}${needsManualPrice ? '' : fixedPriceLabel}</span>
+                    <span>${safeServiceName}${qtyLabel}${needsManualPrice ? '' : fixedPriceLabel}</span>
                     ${needsManualPrice ? `<label class="pos-variable-price-wrap"><span>Precio</span><input class="pos-service-price" type="number" min="1" step="1" inputmode="decimal" value="${price || ''}" placeholder="0" data-id="${safeServiceKey}" aria-label="Precio de ${safeServiceName}" onwheel="this.blur()"></label>` : ''}
                     <button type="button" class="btn-icon btn-remove-pos-service" data-id="${safeServiceKey}"><i data-lucide="x"></i></button>
                 </div>
@@ -3474,21 +3574,29 @@ function renderPosServiceSelection() {
 
 function addPosServiceFromSelect() {
     const select = document.getElementById('service');
+    const qtyInput = document.getElementById('pos-service-qty');
     const serviceId = select?.value;
+    const qty = parseFloat(qtyInput?.value) || 1;
     const service = db.services.find(s => String(s.id) === String(serviceId));
     if (!service) return;
+    if (qty <= 0) return showToast('Ingrese una cantidad valida.', 'error');
 
-    if (!posSelectedServices.some(s => String(s.id) === String(service.id))) {
+    const existing = posSelectedServices.find(s => String(s.id) === String(service.id));
+    if (existing) {
+        existing.qty = (parseFloat(existing.qty) || 1) + qty;
+    } else {
         const fixed = isFixedPriceService(service);
         posSelectedServices.push({
             id: service.id,
             name: service.name,
             price: fixed ? service.price : null,
             salePrice: fixed ? (parseFloat(service.price) || 0) : '',
+            qty,
             priceType: service.priceType || service.price_type || 'variable'
         });
     }
     if (select) select.value = '';
+    if (qtyInput) qtyInput.value = '1';
     syncCustomSelect('service');
     renderPosServiceSelection();
     syncSaleAmountFromFixedService();
@@ -3498,7 +3606,9 @@ function addPosServiceFromSelect() {
 function resetPosServices() {
     posSelectedServices = [];
     const select = document.getElementById('service');
+    const qtyInput = document.getElementById('pos-service-qty');
     if (select) select.value = '';
+    if (qtyInput) qtyInput.value = '1';
     renderPosServiceSelection();
     syncCustomSelect('service');
 }
@@ -3768,6 +3878,14 @@ function getPosProductTotal() {
 function syncSaleAmountFromFixedService() {
     const serviceId = document.getElementById('service')?.value;
     const amountInput = document.getElementById('amount');
+    const paymentMethod = document.getElementById('payment-method')?.value;
+
+    if (amountInput && paymentMethod === 'deuda') {
+        amountInput.value = '0';
+        refreshPosServicesBreakdown();
+        syncAutoDebtFromSale();
+        return;
+    }
     
     // Si venimos de chargeAppointment con multiples servicios, usamos su monto base total
     if (window._chargeBaseAmount !== undefined && window._chargeBaseAmount !== null) {
@@ -3885,9 +4003,12 @@ function resetPosProducts() {
 
 async function saveTransaction() {
     const isIncome = document.getElementById('transaction-type-toggle').checked;
+    const paymentMethodValue = isIncome ? document.getElementById('payment-method')?.value : '';
+    const isDebtPayment = isIncome && paymentMethodValue === 'deuda';
     
     let amount = parseFloat(document.getElementById(isIncome ? 'amount' : 'expense-amount').value);
-    if (isNaN(amount) || amount <= 0) {
+    if (isDebtPayment) amount = 0;
+    if (isNaN(amount) || (!isDebtPayment && amount <= 0)) {
         showToast('Ingrese un monto válido.', 'error');
         return;
     }
@@ -3895,7 +4016,7 @@ async function saveTransaction() {
     document.getElementById('btn-save-transaction').disabled = true;
 
     let txDate = new Date();
-    if (isIncome && document.getElementById('payment-method')?.value === 'seña') {
+    if (isIncome && paymentMethodValue === 'seña') {
         const depositDateInput = document.getElementById('deposit-date-input');
         if (depositDateInput && depositDateInput.value) {
             const [year, month, day] = depositDateInput.value.split('-').map(Number);
@@ -3917,7 +4038,7 @@ async function saveTransaction() {
     };
 
     if (isIncome) {
-        transactionSchema.method = document.getElementById('payment-method').value;
+        transactionSchema.method = paymentMethodValue;
         const isDepositEntry = transactionSchema.method === 'seña';
         const employeeSelect = document.getElementById('employee');
         const selectedEmployeeId = employeeSelect?.value || '';
@@ -3951,12 +4072,14 @@ async function saveTransaction() {
         }
         // Si viene de chargeAppointment con múltiples servicios, usar el detalle completo
         if (window._chargeDetail) {
-            transactionSchema.detail = selectedServices.length ? selectedServices.map(service => service.name).join(' + ') : window._chargeDetail;
+            transactionSchema.detail = selectedServices.length ? selectedServices.map(formatPosServiceDetailName).join(' + ') : window._chargeDetail;
             if (selectedServices.length) {
                 transactionSchema.services = selectedServices.map(service => ({
                     id: service.id || null,
                     name: service.name,
-                    price: getPosServiceSalePrice(service) || null
+                    price: getPosServiceSalePrice(service) || null,
+                    qty: getPosServiceQty(service),
+                    total: getPosServiceLineTotal(service) || null
                 }));
             }
             window._chargeDetail = null; // limpiar después de usar
@@ -3964,11 +4087,13 @@ async function saveTransaction() {
         } else if (isDepositEntry) {
             transactionSchema.detail = 'Seña / Depósito';
         } else if (selectedServices.length > 0) {
-            transactionSchema.detail = selectedServices.map(service => service.name).join(' + ');
+            transactionSchema.detail = selectedServices.map(formatPosServiceDetailName).join(' + ');
             transactionSchema.services = selectedServices.map(service => ({
                 id: service.id || null,
                 name: service.name,
-                price: getPosServiceSalePrice(service) || null
+                price: getPosServiceSalePrice(service) || null,
+                qty: getPosServiceQty(service),
+                total: getPosServiceLineTotal(service) || null
             }));
         } else {
             transactionSchema.detail = srv ? srv.name : 'Servicio';
@@ -4022,16 +4147,17 @@ async function saveTransaction() {
         }
 
         const partialCheckbox = document.getElementById('is-partial-payment');
-        const isPartial = partialCheckbox.checked;
+        const isPartial = partialCheckbox.checked || isDebtPayment;
         const isAutoDebt = partialCheckbox.dataset.autoDebt === '1';
         if (isPartial) {
-            const debtAmount = parseFloat(document.getElementById('full-service-price').value);
+            const saleTotal = getPosServicesTotal() + productTotal;
+            const debtAmount = isDebtPayment ? saleTotal : parseFloat(document.getElementById('full-service-price').value);
             if (isNaN(debtAmount) || debtAmount <= 0) {
                 showToast('Monto de deuda inválido.', 'error');
                 document.getElementById('btn-save-transaction').disabled = false;
                 return;
             }
-            if (!isAutoDebt && debtAmount >= transactionSchema.amount) {
+            if (!isAutoDebt && !isDebtPayment && debtAmount >= transactionSchema.amount) {
                 showToast('La deuda no puede ser mayor o igual al precio del servicio.', 'error');
                 document.getElementById('btn-save-transaction').disabled = false;
                 return;
@@ -4045,7 +4171,12 @@ async function saveTransaction() {
                 const fmt2 = n => Number(n).toLocaleString('es-UY');
                 addClientLog(currentClient.id, `⚠ DEUDA GENERADA: $${fmt2(debtAmount)}`);
             }
-            if (isAutoDebt) {
+            if (isDebtPayment) {
+                transactionSchema.amount = 0;
+                const debtInput = document.getElementById('full-service-price');
+                if (debtInput) debtInput.value = String(Math.round(debtAmount * 100) / 100);
+                transactionSchema.detail += ` (Generó Deuda total: ${debtAmount})`;
+            } else if (isAutoDebt) {
                 const expectedTotal = parseFloat(partialCheckbox.dataset.expectedTotal) || (transactionSchema.amount + debtAmount);
                 transactionSchema.detail += ` (Generó Deuda automática: ${debtAmount} de total ${expectedTotal})`;
             } else {
@@ -7922,16 +8053,20 @@ function chargeAppointment(id) {
             );
             
             if (srv) {
-                const price = isFixedPriceService(srv) ? (parseFloat(srv.price) || 0) : 0;
-                console.log(`[COBRAR] Servicio ${idx + 1} encontrado: "${srv.name}" | Precio: ${price}`);
-                totalAmount += price;
+                const qty = getServiceSelectionQty(srvRef);
+                const price = isFixedPriceService(srv) ? (parseFloat(srv.price) || 0) : (parseFloat(srvRef.price) || 0);
+                const lineTotal = price * qty;
+                console.log(`[COBRAR] Servicio ${idx + 1} encontrado: "${srv.name}" | Precio: ${price} | Cantidad: ${qty}`);
+                totalAmount += lineTotal;
                 if (!firstSrvId) firstSrvId = srv.id;
-                resolvedServices.push({ name: srv.name, price, id: srv.id, priceType: srv.priceType || srv.price_type || 'variable' });
+                resolvedServices.push({ name: srv.name, price, qty, total: lineTotal, id: srv.id, priceType: srv.priceType || srv.price_type || 'variable' });
             } else {
+                const qty = getServiceSelectionQty(srvRef);
                 const fallbackPrice = parseFloat(srvRef.price) || 0;
+                const lineTotal = fallbackPrice * qty;
                 console.warn(`[COBRAR] Servicio ${idx + 1} NO encontrado en base de datos: "${srvRef.name}". Usando precio de cita: ${fallbackPrice}`);
-                totalAmount += fallbackPrice;
-                resolvedServices.push({ name: srvRef.name, price: fallbackPrice, id: null });
+                totalAmount += lineTotal;
+                resolvedServices.push({ name: srvRef.name, price: fallbackPrice, qty, total: lineTotal, id: null });
             }
         });
 
@@ -7947,12 +8082,12 @@ function chargeAppointment(id) {
         const breakdownTotal = document.getElementById('pos-services-breakdown-total');
         
         if (breakdownPanel && breakdownList) {
-            if (resolvedServices.length > 1) {
+            if (getServiceSelectionUnitCount(resolvedServices) > 1) {
                 const fmt = n => n.toLocaleString('es-UY');
                 breakdownList.innerHTML = resolvedServices.map(s => `
                     <div style="display:flex; justify-content:space-between; padding:3px 0; color:var(--text-primary);">
-                        <span style="font-weight:500;">✦ ${s.name}</span>
-                        <span style="font-weight:700; color:var(--success);">$${fmt(s.price)}</span>
+                        <span style="font-weight:500;">${s.name}${s.qty > 1 ? ` x${fmt(s.qty)}` : ''}</span>
+                        <span style="font-weight:700; color:var(--success);">$${fmt(s.total)}</span>
                     </div>
                 `).join('');
                 if (breakdownTotal) breakdownTotal.textContent = `$${fmt(totalAmount)}`;
@@ -7963,13 +8098,14 @@ function chargeAppointment(id) {
         }
 
         // Guardar detalle completo para usar en saveTransaction
-        window._chargeDetail = resolvedServices.map(s => s.name).join(' + ');
+        window._chargeDetail = resolvedServices.map(s => formatPosServiceDetailName(s)).join(' + ');
         window._chargeBaseAmount = totalAmount;
         posSelectedServices = resolvedServices.map(s => ({
             id: s.id,
             name: s.name,
             price: s.price,
             salePrice: s.price || '',
+            qty: s.qty,
             priceType: s.priceType || (s.price ? 'fijo' : 'variable')
         }));
         renderPosServiceSelection();

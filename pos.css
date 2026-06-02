@@ -277,6 +277,8 @@ body::before {
 .weekly-day { display: flex; align-items: center; gap: .45rem; color: var(--text-secondary); font-size: .86rem; }
 .apt-selected-services { display: flex; flex-direction: column; gap: .45rem; margin-top: .65rem; }
 .apt-service-chip { display: flex; align-items: center; justify-content: space-between; gap: .6rem; padding: .55rem .7rem; background: rgba(201,168,76,.08); border: 1px solid rgba(201,168,76,.22); border-radius: var(--radius-sm); color: var(--text-primary); font-size: .84rem; }
+.pos-service-inline-controls { display: flex; gap: .5rem; align-items: center; }
+.pos-service-inline-controls .sale-service-qty { width: 84px; flex-shrink: 0; }
 .pos-variable-price-wrap { display: inline-flex; align-items: center; gap: .4rem; margin-left: auto; color: var(--text-dim); font-size: .74rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
 .pos-service-price { width: 116px; padding: .5rem .6rem; background: rgba(15,10,24,.82); border: 1px solid var(--gold-400); border-radius: var(--radius-sm); color: var(--text-primary); font: inherit; text-align: right; }
 .pos-service-price:focus { outline: none; border-color: var(--gold-400); }
@@ -316,7 +318,7 @@ body::before {
     align-items: center;
 }
 .pos-products-inline-controls .sale-product-qty {
-    width: 72px;
+    width: 84px;
     flex-shrink: 0;
 }
 .sale-payment-preview { margin-top: .7rem; padding: .75rem; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: rgba(15,10,24,.52); }
@@ -426,6 +428,11 @@ body::before {
 .textarea-custom { padding: 0.8rem; resize: vertical; min-height: 80px; }
 .input-wrap input:focus, .textarea-custom:focus { border-color: var(--gold-400); }
 .input-wrap:has(input:focus) > svg, .input-wrap:has(input:focus) > i { color: var(--gold-400); }
+.input-wrap input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
+.input-wrap input[type="number"]::-webkit-outer-spin-button,
+.input-wrap input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.quantity-input-wrap input[type="number"] { padding-left: 2.15rem; padding-right: .55rem; text-align: center; font-weight: 800; color: var(--gold-300); }
+.quantity-input-wrap:has(input:focus) { box-shadow: 0 0 0 1px rgba(201,168,76,.35); border-radius: var(--radius-sm); }
 
 input[type="date"]::-webkit-calendar-picker-indicator {
     filter: invert(1);
