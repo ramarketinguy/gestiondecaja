@@ -830,6 +830,20 @@
 
                 <div class="card" style="grid-column: span 1;">
                     <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+                        <h2 class="card-title"><i data-lucide="warehouse"></i> Stock interno</h2>
+                        <button class="btn btn-primary btn-sm" onclick="openInternalProductModal()"><i data-lucide="plus"></i> Nuevo</button>
+                    </div>
+                    <div class="card-body" style="padding: 1.5rem;">
+                        <div style="max-height: 350px; overflow-y:auto; padding-right:5px;">
+                            <ul class="task-list internal-stock-list" id="settings-internal-products-list">
+                                <!-- Llenado por JS -->
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card" style="grid-column: span 1;">
+                    <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
                         <h2 class="card-title"><i data-lucide="users"></i> Staff</h2>
                         <button class="btn btn-primary btn-sm" onclick="openEmployeeModal()"><i data-lucide="plus"></i> Nuevo</button>
                     </div>
@@ -1431,6 +1445,40 @@
                         <button type="submit" class="btn btn-primary" style="width: 100%;">
                             <i data-lucide="save"></i>
                             <span>Guardar Servicio</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Producto Interno -->
+    <div class="modal-overlay" id="modal-internal-product">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 id="internal-product-modal-title">Nuevo Insumo Interno</h2>
+                <button class="modal-close-btn" id="modal-internal-product-close"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <form id="fm-internal-product">
+                    <div class="form-group">
+                        <label>Nombre del insumo</label>
+                        <div class="input-wrap">
+                            <i data-lucide="warehouse"></i>
+                            <input type="text" id="internal-product-name" placeholder="Ej: Oxidante 20 vol" required>
+                        </div>
+                    </div>
+                    <div class="form-group" style="margin-top: 1rem;">
+                        <label>Stock actual</label>
+                        <div class="input-wrap">
+                            <i data-lucide="boxes"></i>
+                            <input type="number" id="internal-product-stock" placeholder="0" min="0" step="1" required>
+                        </div>
+                    </div>
+                    <div class="modal-footer" style="margin-top: 2rem;">
+                        <button type="submit" class="btn btn-primary" style="width: 100%;">
+                            <i data-lucide="save"></i>
+                            <span>Guardar Insumo</span>
                         </button>
                     </div>
                 </form>

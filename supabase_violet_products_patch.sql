@@ -23,9 +23,13 @@ create table if not exists public.products (
     name text not null,
     price numeric default 0,
     stock numeric,
+    product_type text default 'retail',
     active boolean default true,
     created_at timestamptz default now()
 );
+
+alter table public.products
+    add column if not exists product_type text default 'retail';
 
 with first_user as (
     select id from auth.users order by created_at asc limit 1
@@ -34,6 +38,7 @@ update public.products set user_id = (select id from first_user) where user_id i
 
 create index if not exists idx_products_user_id on public.products(user_id);
 create index if not exists idx_products_active on public.products(active);
+create index if not exists idx_products_product_type on public.products(product_type);
 create index if not exists idx_appointments_employee_id on public.appointments(employee_id);
 create index if not exists idx_transactions_employee_id on public.transactions(employee_id);
 

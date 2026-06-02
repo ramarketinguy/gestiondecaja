@@ -176,6 +176,25 @@ function getProductPrice(product) {
     return parseFloat(product?.price) || 0;
 }
 
+function getProductType(product) {
+    const explicitType = String(product?.productType || product?.product_type || '').toLowerCase().trim();
+    if (explicitType) return explicitType;
+    const hasStock = product?.stock !== null && product?.stock !== undefined && product?.stock !== '';
+    return getProductPrice(product) === 0 && hasStock ? 'internal' : 'retail';
+}
+
+function isInternalProduct(product) {
+    return getProductType(product) === 'internal';
+}
+
+function getRetailProducts() {
+    return (db.products || []).filter(product => !isInternalProduct(product));
+}
+
+function getInternalProducts() {
+    return (db.products || []).filter(isInternalProduct);
+}
+
 function normalizeSearchText(value) {
     return String(value || '')
         .normalize('NFD')
@@ -211,8 +230,10 @@ function getStoredBusinessAlerts() {
 
 function addBusinessAlert(alert) {
     const alerts = getStoredBusinessAlerts();
-    alerts.unshift({ id: createLocalId('alert'), createdAt: new Date().toISOString(), ...alert });
-    localStorage.setItem(BUSINESS_ALERTS_KEY, JSON.stringify(alerts.slice(0, 30)));
+    const id = alert?.id || createLocalId('alert');
+    const next = alerts.filter(item => String(item.id) !== String(id));
+    next.unshift({ id, createdAt: new Date().toISOString(), ...alert });
+    localStorage.setItem(BUSINESS_ALERTS_KEY, JSON.stringify(next.slice(0, 30)));
 }
 
 function isLocalRecordId(id) {
@@ -321,7 +342,7 @@ function getCatalogSearchItems() {
         };
     });
 
-    const products = (db.products || []).map(product => {
+    const products = getRetailProducts().map(product => {
         const price = getProductPrice(product);
         const hasStock = product.stock !== null && product.stock !== undefined && product.stock !== '';
         return {
@@ -700,6 +721,7 @@ async function loadDataFromSupabase() {
         })},
         { name: 'products', stateKey: 'products', schemaPatch: 'supabase_violet_products_patch.sql', transform: p => ({
             ...p,
+            productType: p.product_type || p.productType || null,
             price: parseFloat(p.price) || 0,
             stock: p.stock === null || p.stock === undefined ? null : parseFloat(p.stock)
         })},
@@ -2960,14 +2982,14 @@ function updateFormSelects() {
     if (productSelect) {
         const prevProduct = productSelect.value;
         productSelect.innerHTML = '<option value="" disabled selected style="display:none">Seleccione producto...</option>';
-        db.products.forEach(p => {
+        getRetailProducts().forEach(p => {
             const opt = document.createElement('option');
             opt.value = p.id;
             const stockLabel = hasControlledStock(p) ? ` - Stock: ${p.stock}` : '';
             opt.textContent = `${p.name} ($${fmt(getProductPrice(p))})${stockLabel}`;
             productSelect.appendChild(opt);
         });
-        if (prevProduct && db.products.some(p => String(p.id) === String(prevProduct))) {
+        if (prevProduct && getRetailProducts().some(p => String(p.id) === String(prevProduct))) {
             productSelect.value = prevProduct;
         }
         if (!productSelect.dataset.changeBound) {
@@ -6521,6 +6543,7 @@ function renderServicesRanking() {
 
 let editingServiceId = null;
 let editingEmployeeId = null;
+let editingInternalProductId = null;
 
 let _settingsInitialized = false;
 function initSettings() {
@@ -6531,6 +6554,8 @@ function initSettings() {
         document.getElementById('modal-emp-close').addEventListener('click', closeEmployeeModal);
         const productClose = document.getElementById('modal-product-close');
         if (productClose) productClose.addEventListener('click', closeProductModal);
+        const internalProductClose = document.getElementById('modal-internal-product-close');
+        if (internalProductClose) internalProductClose.addEventListener('click', closeInternalProductModal);
 
         // Habilitar/deshabilitar precio según tipo seleccionado
         document.getElementById('srv-type').addEventListener('change', (e) => {
@@ -6541,6 +6566,8 @@ function initSettings() {
         document.getElementById('fm-employee').addEventListener('submit', (e) => { e.preventDefault(); saveEmployee(); });
         const productForm = document.getElementById('fm-product');
         if (productForm) productForm.addEventListener('submit', (e) => { e.preventDefault(); saveProduct(); });
+        const internalProductForm = document.getElementById('fm-internal-product');
+        if (internalProductForm) internalProductForm.addEventListener('submit', (e) => { e.preventDefault(); saveInternalProduct(); });
 
         // Cargar clave IA guardada
         const savedKey = getAIKey();
@@ -6557,6 +6584,7 @@ function initSettings() {
     // Estos renders se ejecutan siempre para refrescar los datos
     renderServicesList();
     renderProductsList();
+    renderInternalProductsList();
     renderEmployeesList();
     updateFormSelects();
     if (typeof renderStaffPanel === 'function') renderStaffPanel();
@@ -7083,6 +7111,7 @@ async function saveProduct() {
         name,
         price,
         stock,
+        product_type: 'retail',
         active: true
     };
 
@@ -7093,14 +7122,14 @@ async function saveProduct() {
         if (editingProductId) {
             const { data, error } = await updateRowSafe('products', editingProductId, payload);
             const local = db.products.find(x => String(x.id) === String(editingProductId));
-            const next = data?.[0] || { ...(local || {}), ...payload, id: editingProductId, pendingSync: Boolean(error) };
+            const next = { ...(local || {}), ...(data?.[0] || {}), ...payload, productType: 'retail', id: editingProductId, pendingSync: Boolean(error) };
             if (local) Object.assign(local, next);
             else db.products.push(next);
             persistCollectionLocal('products', db.products);
             showToast(error ? 'Producto guardado localmente' : 'Producto actualizado', error ? 'warning' : 'success');
         } else {
             const { data, error } = await insertRowsSafe('products', payload);
-            const saved = data?.[0] || { id: createLocalId('prod'), ...payload, pendingSync: true };
+            const saved = { id: data?.[0]?.id || createLocalId('prod'), ...(data?.[0] || {}), ...payload, productType: 'retail', pendingSync: Boolean(error) };
             db.products.push(saved);
             persistCollectionLocal('products', db.products);
             showToast(error ? 'Producto guardado localmente' : 'Producto creado', error ? 'warning' : 'success');
@@ -7117,9 +7146,178 @@ async function saveProduct() {
     } finally {
         if (submitBtn) submitBtn.disabled = false;
         renderProductsList();
+        renderInternalProductsList();
         updateFormSelects();
         closeProductModal();
     }
+}
+
+function openInternalProductModal(id = null) {
+    editingInternalProductId = id;
+    const title = document.getElementById('internal-product-modal-title');
+    if (title) title.textContent = id ? 'Editar Insumo Interno' : 'Nuevo Insumo Interno';
+
+    if (id) {
+        const product = db.products.find(x => String(x.id) === String(id));
+        if (product) {
+            document.getElementById('internal-product-name').value = product.name || '';
+            document.getElementById('internal-product-stock').value = product.stock ?? '';
+        }
+    } else {
+        document.getElementById('fm-internal-product')?.reset();
+    }
+
+    document.getElementById('modal-internal-product')?.classList.add('open');
+    refreshIcons();
+}
+window.openInternalProductModal = openInternalProductModal;
+
+function closeInternalProductModal() {
+    document.getElementById('modal-internal-product')?.classList.remove('open');
+    editingInternalProductId = null;
+}
+
+async function saveInternalProduct() {
+    const name = document.getElementById('internal-product-name')?.value.trim();
+    const stockRaw = document.getElementById('internal-product-stock')?.value;
+    const stock = parseFloat(stockRaw);
+
+    if (!name) return showToast('Ingrese el nombre del insumo.', 'error');
+    if (stockRaw === '' || Number.isNaN(stock) || stock < 0) return showToast('Ingrese un stock valido.', 'error');
+
+    const payload = {
+        name,
+        price: 0,
+        stock,
+        product_type: 'internal',
+        active: true
+    };
+
+    const submitBtn = document.querySelector('#fm-internal-product [type="submit"]');
+    if (submitBtn) submitBtn.disabled = true;
+
+    try {
+        if (editingInternalProductId) {
+            const { data, error } = await updateRowSafe('products', editingInternalProductId, payload);
+            const local = db.products.find(x => String(x.id) === String(editingInternalProductId));
+            const next = { ...(local || {}), ...(data?.[0] || {}), ...payload, productType: 'internal', id: editingInternalProductId, pendingSync: Boolean(error) };
+            if (local) Object.assign(local, next);
+            else db.products.push(next);
+            showToast(error ? 'Insumo guardado localmente' : 'Insumo actualizado', error ? 'warning' : 'success');
+        } else {
+            const { data, error } = await insertRowsSafe('products', payload);
+            const saved = { id: data?.[0]?.id || createLocalId('prod'), ...(data?.[0] || {}), ...payload, productType: 'internal', pendingSync: Boolean(error) };
+            db.products.push(saved);
+            showToast(error ? 'Insumo guardado localmente' : 'Insumo creado', error ? 'warning' : 'success');
+        }
+        persistCollectionLocal('products', db.products);
+    } catch (err) {
+        console.error('[InternalProduct] Save Error:', err);
+        const fallback = {
+            id: editingInternalProductId || createLocalId('prod'),
+            ...payload,
+            productType: 'internal',
+            pendingSync: true
+        };
+        upsertLocalCollectionItem('products', fallback);
+        showToast('Insumo guardado localmente', 'warning');
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
+        renderProductsList();
+        renderInternalProductsList();
+        updateFormSelects();
+        closeInternalProductModal();
+    }
+}
+
+async function updateInternalProductStock(productId, qtyChange) {
+    const product = db.products.find(p => String(p.id) === String(productId));
+    if (!product || !isInternalProduct(product)) return;
+
+    const previousStock = parseFloat(product.stock) || 0;
+    const newStock = Math.max(0, previousStock + qtyChange);
+    product.stock = newStock;
+
+    if (previousStock > 1 && newStock === 1 && qtyChange < 0) {
+        addBusinessAlert({
+            type: 'internal-stock',
+            level: 'warning',
+            title: 'Ultima unidad de insumo interno',
+            message: `${product.name}: queda 1 unidad`
+        });
+        showToast(`Queda 1 unidad de ${product.name}.`, 'warning');
+    }
+
+    persistCollectionLocal('products', db.products);
+    renderInternalProductsList();
+    if (currentView === 'dashboard' && typeof renderDashboardAlerts === 'function') renderDashboardAlerts();
+
+    try {
+        const { error } = await updateRowSafe('products', productId, { stock: newStock });
+        if (error) {
+            console.warn(`[Stock interno] Error al actualizar stock remoto de ${product.name}:`, error);
+            product.pendingSync = true;
+            persistCollectionLocal('products', db.products);
+        }
+    } catch (e) {
+        console.error(`[Stock interno] Excepcion al actualizar stock de ${product.name}:`, e);
+        product.pendingSync = true;
+        persistCollectionLocal('products', db.products);
+    }
+}
+
+function renderInternalProductsList() {
+    const list = document.getElementById('settings-internal-products-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    const products = getInternalProducts();
+    if (products.length === 0) {
+        list.innerHTML = '<span style="color:var(--text-dim);font-size:0.85rem">No hay insumos internos registrados.</span>';
+        return;
+    }
+
+    products.forEach(product => {
+        const stock = parseFloat(product.stock) || 0;
+        const countClass = stock <= 0 ? 'is-empty' : (stock === 1 ? 'is-last' : '');
+        const li = document.createElement('li');
+        li.className = 'task-item';
+        li.innerHTML = `
+            <div class="internal-stock-main">
+                <span class="internal-stock-name">${escapeHtml(product.name || 'Insumo')}</span>
+                <span class="internal-stock-meta">${product.pendingSync ? 'Pendiente de sincronizar' : 'Consumo interno del salon'}</span>
+            </div>
+            <div class="internal-stock-controls">
+                <button type="button" class="internal-stock-step btn-internal-stock-dec" data-id="${product.id}" ${stock <= 0 ? 'disabled' : ''} aria-label="Restar stock"><i data-lucide="minus"></i></button>
+                <span class="internal-stock-count ${countClass}">${fmt(stock)}</span>
+                <button type="button" class="internal-stock-step btn-internal-stock-inc" data-id="${product.id}" aria-label="Sumar stock"><i data-lucide="plus"></i></button>
+                <button class="btn-icon btn-sm" onclick="openInternalProductModal('${product.id}')" style="padding:0;color:var(--text-dim)"><i data-lucide="edit-2" style="width:14px;height:14px"></i></button>
+                <button class="btn-icon btn-sm btn-del-internal-product" data-id="${product.id}" style="padding:0;color:var(--danger)"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
+            </div>
+        `;
+        list.appendChild(li);
+    });
+
+    list.querySelectorAll('.btn-internal-stock-dec').forEach(btn => {
+        btn.onclick = () => updateInternalProductStock(btn.dataset.id, -1);
+    });
+    list.querySelectorAll('.btn-internal-stock-inc').forEach(btn => {
+        btn.onclick = () => updateInternalProductStock(btn.dataset.id, 1);
+    });
+    list.querySelectorAll('.btn-del-internal-product').forEach(btn => {
+        btn.onclick = async (e) => {
+            const id = e.currentTarget.getAttribute('data-id');
+            const { error } = await deleteRowSafe('products', id);
+            if (error) console.warn('[InternalProduct] Delete remote error:', error);
+            db.products = db.products.filter(x => String(x.id) !== String(id));
+            persistCollectionLocal('products', db.products);
+            renderInternalProductsList();
+            renderProductsList();
+            updateFormSelects();
+            if (currentView === 'dashboard' && typeof renderDashboardAlerts === 'function') renderDashboardAlerts();
+        };
+    });
+    refreshIcons();
 }
 
 /**
@@ -7162,12 +7360,13 @@ function renderProductsList() {
     const list = document.getElementById('settings-products-list');
     if (!list) return;
     list.innerHTML = '';
-    if (!db.products || db.products.length === 0) {
+    const products = getRetailProducts();
+    if (products.length === 0) {
         list.innerHTML = '<span style="color:var(--text-dim);font-size:0.85rem">No hay productos registrados.</span>';
         return;
     }
 
-    db.products.forEach(product => {
+    products.forEach(product => {
         const li = document.createElement('li');
         li.className = 'task-item';
         const stockText = product.stock === null || product.stock === undefined || product.stock === ''
@@ -7191,6 +7390,7 @@ function renderProductsList() {
             db.products = db.products.filter(x => String(x.id) !== String(id));
             persistCollectionLocal('products', db.products);
             renderProductsList();
+            renderInternalProductsList();
             updateFormSelects();
             renderPosProducts();
         };

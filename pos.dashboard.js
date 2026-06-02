@@ -24,15 +24,52 @@ function dashboardEscape(value) {
     }[char]));
 }
 
+const DASHBOARD_DISMISSED_ALERTS_KEY = 'violet_dashboard_dismissed_alerts';
+
+function getDismissedDashboardAlerts() {
+    try {
+        return JSON.parse(localStorage.getItem(DASHBOARD_DISMISSED_ALERTS_KEY) || '[]');
+    } catch (_) {
+        return [];
+    }
+}
+
+function setDismissedDashboardAlerts(ids) {
+    localStorage.setItem(DASHBOARD_DISMISSED_ALERTS_KEY, JSON.stringify([...new Set(ids)].slice(-200)));
+}
+
+function getDashboardAlertId(alert) {
+    if (alert.id) return String(alert.id);
+    return `${alert.type || 'alert'}:${alert.title || ''}:${alert.message || ''}`;
+}
+
+function dismissDashboardAlert(alertId) {
+    if (!alertId) return;
+    setDismissedDashboardAlerts([...getDismissedDashboardAlerts(), alertId]);
+    renderDashboardAlerts();
+}
+window.dismissDashboardAlert = dismissDashboardAlert;
+
+function dismissAllDashboardAlerts() {
+    const visibleIds = getDashboardAlerts().map(getDashboardAlertId);
+    setDismissedDashboardAlerts([...getDismissedDashboardAlerts(), ...visibleIds]);
+    renderDashboardAlerts();
+}
+window.dismissAllDashboardAlerts = dismissAllDashboardAlerts;
+
 function getDashboardAlerts() {
     const alerts = [];
     const products = db?.products || [];
     products.forEach(product => {
+        const isInternal = typeof isInternalProduct === 'function' ? isInternalProduct(product) : false;
+        if (isInternal) return;
         const controlled = product.stock !== null && product.stock !== undefined && product.stock !== '';
         if (!controlled) return;
         const stock = parseFloat(product.stock) || 0;
         if (stock <= 3) {
             alerts.push({
+                id: `retail-stock:${product.id}:${stock}`,
+                type: 'retail-stock',
                 level: stock <= 0 ? 'critical' : 'warning',
                 title: stock <= 0 ? 'Producto sin stock' : 'Poco stock',
                 message: `${product.name}: ${stock} unidad${stock === 1 ? '' : 'es'}`
@@ -54,6 +91,8 @@ function getDashboardAlerts() {
         if (group.length > 2) {
             const first = group[0];
             alerts.push({
+                id: `duplicate-appointment:${getAppointmentDate(first)}:${getAppointmentTime(first)}:${first.clientId || first.client_id || first.clientName || first.client_name || ''}`,
+                type: 'duplicate-appointment',
                 level: 'critical',
                 title: 'Más de 2 turnos iguales',
                 message: `${first.clientName || first.client_name || 'Clienta'} tiene ${group.length} turnos el ${getAppointmentDate(first)} a las ${getAppointmentTime(first)}`
@@ -66,6 +105,8 @@ function getDashboardAlerts() {
         const hours = typeof getBusinessHoursForDate === 'function' ? getBusinessHoursForDate(date) : null;
         if (hours?.closed) {
             alerts.push({
+                id: `closed-day-recurrence:${apt.id || date}`,
+                type: 'closed-day-recurrence',
                 level: 'warning',
                 title: 'Recurrencia en día cerrado',
                 message: `${apt.clientName || apt.client_name || 'Clienta'} tiene cita recurrente el ${date}`
@@ -76,7 +117,8 @@ function getDashboardAlerts() {
     const stored = typeof getStoredBusinessAlerts === 'function' ? getStoredBusinessAlerts() : [];
     stored.slice(0, 5).forEach(alert => alerts.push(alert));
 
-    return alerts.slice(0, 12);
+    const dismissed = new Set(getDismissedDashboardAlerts().map(String));
+    return alerts.filter(alert => !dismissed.has(getDashboardAlertId(alert))).slice(0, 12);
 }
 
 function renderDashboardAlerts() {
@@ -87,18 +129,32 @@ function renderDashboardAlerts() {
         list.innerHTML = '<span style="color:var(--text-dim);font-size:0.85rem">Sin avisos relevantes.</span>';
         return;
     }
-    list.innerHTML = alerts.map(alert => {
+    list.innerHTML = `
+        <div style="display:flex;justify-content:flex-end;margin-bottom:.6rem;">
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-dismiss-all-alerts">Omitir todos</button>
+        </div>
+        ${alerts.map(alert => {
         const critical = alert.level === 'critical';
+        const alertId = dashboardEscape(getDashboardAlertId(alert));
         return `
             <div class="widget-list-item ${critical ? 'stock-alert-critical' : 'stock-alert-item'}">
                 <div class="info">
                     <span class="main-text">${dashboardEscape(alert.title)}</span>
                     <span class="sub-text">${dashboardEscape(alert.message)}</span>
                 </div>
-                <span class="badge badge-border" style="color:${critical ? 'var(--danger)' : 'var(--warning)'};border-color:${critical ? 'var(--danger)' : 'var(--warning)'}">${critical ? 'Crítico' : 'Aviso'}</span>
+                <div style="display:flex;align-items:center;gap:.45rem;flex-shrink:0;">
+                    <span class="badge badge-border" style="color:${critical ? 'var(--danger)' : 'var(--warning)'};border-color:${critical ? 'var(--danger)' : 'var(--warning)'}">${critical ? 'Critico' : 'Aviso'}</span>
+                    <button type="button" class="btn-icon btn-dismiss-alert" data-alert-id="${alertId}" title="Omitir aviso"><i data-lucide="x"></i></button>
+                </div>
             </div>
         `;
-    }).join('');
+    }).join('')}
+    `;
+    const dismissAllBtn = document.getElementById('btn-dismiss-all-alerts');
+    if (dismissAllBtn) dismissAllBtn.onclick = dismissAllDashboardAlerts;
+    list.querySelectorAll('.btn-dismiss-alert').forEach(btn => {
+        btn.onclick = () => dismissDashboardAlert(btn.dataset.alertId);
+    });
     if (typeof refreshIcons === 'function') refreshIcons();
 }
 

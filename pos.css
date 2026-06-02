@@ -284,6 +284,17 @@ body::before {
 .pos-service-price:focus { outline: none; border-color: var(--gold-400); }
 .stock-alert-item { border-left: 3px solid var(--warning); }
 .stock-alert-critical { border-left-color: var(--danger); background: var(--danger-bg); }
+.internal-stock-list .task-item { align-items: center; gap: .8rem; }
+.internal-stock-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .18rem; }
+.internal-stock-name { color: var(--text-primary); font-weight: 700; font-size: .88rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.internal-stock-meta { color: var(--text-dim); font-size: .74rem; }
+.internal-stock-controls { display: flex; align-items: center; gap: .45rem; flex-shrink: 0; }
+.internal-stock-count { min-width: 52px; padding: .38rem .55rem; border: 1px solid rgba(201,168,76,.28); border-radius: var(--radius-sm); background: rgba(201,168,76,.08); color: var(--gold-300); font-weight: 900; text-align: center; }
+.internal-stock-count.is-last { border-color: rgba(234,179,8,.75); background: rgba(234,179,8,.14); color: var(--warning); }
+.internal-stock-count.is-empty { border-color: rgba(248,113,113,.65); background: rgba(248,113,113,.12); color: var(--danger); }
+.internal-stock-step { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); background: rgba(255,255,255,.035); color: var(--text-secondary); cursor: pointer; transition: all var(--transition-fast); }
+.internal-stock-step:hover:not(:disabled) { border-color: var(--gold-400); color: var(--gold-300); background: rgba(201,168,76,.1); }
+.internal-stock-step:disabled { opacity: .35; cursor: not-allowed; }
 .sale-products-controls { display: grid; grid-template-columns: minmax(0, 1fr) 110px auto; gap: .6rem; align-items: center; }
 .sale-products-list { display: flex; flex-direction: column; gap: .45rem; margin-top: .8rem; }
 .sale-product-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: .6rem; align-items: center; padding: .55rem .7rem; background: rgba(0,0,0,.16); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); font-size: .84rem; }
