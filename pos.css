@@ -915,6 +915,15 @@ tbody tr:hover { background: var(--bg-hover); }
     gap: 12px;
     margin-top: 1rem;
 }
+.client-debt-entry {
+    padding: .9rem;
+    border: 1px solid rgba(248,113,113,.25);
+    border-radius: var(--radius-sm);
+    background: rgba(248,113,113,.07);
+}
+@media (max-width: 720px) {
+    .client-debt-entry .form-grid { grid-template-columns: 1fr !important; }
+}
 
 .client-file-item {
     position: relative;

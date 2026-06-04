@@ -5621,6 +5621,7 @@ function renderClientsTable(filter = '') {
 function openClientModal(clientId = null) {
     document.getElementById('client-modal').classList.add('open');
     activeModal = clientId;
+    resetClientDebtInputs();
 
     const bBadge = document.getElementById('crm-badge-balance');
     bBadge.classList.add('hidden');
@@ -6197,6 +6198,87 @@ function closeClientModal() {
     activeModal = null;
 }
 
+function resetClientDebtInputs() {
+    const amount = document.getElementById('cm-add-debt-amount');
+    const detail = document.getElementById('cm-add-debt-detail');
+    if (amount) amount.value = '';
+    if (detail) detail.value = '';
+}
+
+function getClientDebtFormData() {
+    const rawAmount = document.getElementById('cm-add-debt-amount')?.value;
+    const amount = rawAmount === '' ? 0 : parseFloat(rawAmount);
+    const detail = document.getElementById('cm-add-debt-detail')?.value.trim() || '';
+    return { amount, detail };
+}
+
+async function addManualDebtToClient(client, amount, detail = '') {
+    if (!client || !(amount > 0)) return;
+
+    const previousDebt = parseFloat(client.debt) || 0;
+    const nextDebt = previousDebt + amount;
+    client.debt = nextDebt;
+
+    if (window.supabaseClient && !isLocalRecordId(client.id)) {
+        const { error } = await updateClientSafe(client.id, { debt: nextDebt });
+        if (error) {
+            console.warn('[ClientDebt] Error actualizando deuda remota:', error);
+            client.pendingSync = true;
+        }
+    } else if (isLocalRecordId(client.id)) {
+        client.pendingSync = true;
+    }
+
+    persistCollectionLocal('clients', db.clients);
+
+    const cleanDetail = detail || 'Deuda agregada desde ficha de clienta';
+    addClientLog(client.id, `⚠ DEUDA AGREGADA: $${fmt(amount)}${detail ? ` — ${detail}` : ''}`);
+
+    const debtTx = withCurrentUser({
+        transaction_date: new Date().toISOString(),
+        is_income: true,
+        amount: 0,
+        client_name: client.name || '',
+        client_id: client.id,
+        detail: `Deuda manual: $${amount} — ${cleanDetail}`,
+        method: 'deuda',
+        employee: ''
+    });
+
+    try {
+        const { data, error } = await insertRowsSafe('transactions', debtTx);
+        const savedTx = data?.[0] || { id: createLocalId('tx'), ...debtTx, pendingSync: Boolean(error) };
+        db.transactions.push({
+            id: savedTx.id,
+            date: savedTx.transaction_date || debtTx.transaction_date,
+            isIncome: savedTx.is_income ?? debtTx.is_income,
+            amount: parseFloat(savedTx.amount ?? debtTx.amount) || 0,
+            clientName: savedTx.client_name || debtTx.client_name,
+            clientId: savedTx.client_id || debtTx.client_id,
+            detail: savedTx.detail || debtTx.detail,
+            method: savedTx.method || debtTx.method,
+            employee: savedTx.employee || debtTx.employee || '',
+            pendingSync: Boolean(error)
+        });
+        persistCollectionLocal('transactions', db.transactions);
+    } catch (err) {
+        console.error('[ClientDebt] Error registrando transaccion de deuda:', err);
+        db.transactions.push({
+            id: createLocalId('tx'),
+            date: debtTx.transaction_date,
+            isIncome: true,
+            amount: 0,
+            clientName: debtTx.client_name,
+            clientId: debtTx.client_id,
+            detail: debtTx.detail,
+            method: debtTx.method,
+            employee: '',
+            pendingSync: true
+        });
+        persistCollectionLocal('transactions', db.transactions);
+    }
+}
+
 async function saveClient() {
     const name = document.getElementById('cm-name').value.trim();
     if (!name) {
@@ -6204,6 +6286,12 @@ async function saveClient() {
         document.getElementById('cm-name').style.borderBottomColor = 'var(--danger)';
         setTimeout(() => document.getElementById('cm-name').style.borderBottomColor = '', 2000);
         return showToast('Completá el nombre de la clienta (primer campo)', 'error');
+    }
+
+    const manualDebt = getClientDebtFormData();
+    if (Number.isNaN(manualDebt.amount) || manualDebt.amount < 0) {
+        document.getElementById('cm-add-debt-amount')?.focus();
+        return showToast('Ingrese un monto de deuda valido.', 'error');
     }
 
     const clientData = withCurrentUser({
@@ -6302,6 +6390,10 @@ async function saveClient() {
     const savedClient = activeModal
         ? db.clients.find(c => c.id == activeModal)
         : db.clients[db.clients.length - 1];
+
+    if (savedClient && manualDebt.amount > 0) {
+        await addManualDebtToClient(savedClient, manualDebt.amount, manualDebt.detail);
+    }
 
     closeClientModal();
     if (currentView === 'clients') renderClientsTable();

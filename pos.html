@@ -1128,6 +1128,32 @@
                         <textarea class="textarea-custom" id="cm-notes" rows="4" placeholder="Ej: Usa color castaño claro (Fórmula: 6.0 + 20vol). Alérgica a X producto."></textarea>
                     </div>
 
+                    <div class="client-debt-entry" style="margin-top:1.5rem;">
+                        <div style="display:flex;align-items:center;gap:.55rem;margin-bottom:.75rem;color:var(--danger);font-weight:800;text-transform:uppercase;font-size:.74rem;letter-spacing:.04em;">
+                            <i data-lucide="alert-circle" style="width:15px;height:15px;"></i>
+                            <span>Agregar deuda</span>
+                        </div>
+                        <div class="form-grid" style="grid-template-columns: 140px 1fr; padding:0;">
+                            <div class="form-group">
+                                <label>Monto ($)</label>
+                                <div class="input-wrap">
+                                    <i data-lucide="dollar-sign"></i>
+                                    <input type="number" id="cm-add-debt-amount" placeholder="0" min="0" step="1" onwheel="this.blur()">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>Detalle</label>
+                                <div class="input-wrap">
+                                    <i data-lucide="file-text"></i>
+                                    <input type="text" id="cm-add-debt-detail" placeholder="Ej: Saldo pendiente de servicio">
+                                </div>
+                            </div>
+                        </div>
+                        <p id="cm-add-debt-helper" style="margin:.55rem 0 0;color:var(--text-dim);font-size:.74rem;line-height:1.45;">
+                            Si dejás el monto en 0, no se agrega deuda. Si hay deuda previa, este monto se suma.
+                        </p>
+                    </div>
+
                     <!-- Señas activas -->
                     <div id="cm-deposits-section" class="hidden" style="margin-top:1.5rem;">
                         <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;">
